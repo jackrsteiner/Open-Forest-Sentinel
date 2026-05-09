@@ -1,0 +1,126 @@
+name: Agent bead
+description: A small, agent-sized unit of work with explicit scope, acceptance criteria, and tests.
+title: "[bead] <short imperative summary>"
+labels: ["bead"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A **bead** is a small, independently-shippable unit of work sized for a single agent run.
+        Every bead must belong to an **epic**, declare **acceptance criteria**, declare its **dependencies**
+        on other beads, and ship with **tests that cover the new behavior** and that **pass in CI**.
+
+        Use GitHub's native sub-issue feature to attach this bead to its parent epic when applicable.
+        See `docs/beads.md` for the full convention.
+
+  - type: input
+    id: epic
+    attributes:
+      label: Epic
+      description: The epic issue this bead belongs to. Use a `#NNN` reference so GitHub links it.
+      placeholder: "#42"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: parent_relationship
+    attributes:
+      label: Parent relationship
+      description: How this bead relates to its epic.
+      options:
+        - Sub-issue of the epic (preferred)
+        - Tracked by the epic via task list
+        - Standalone bead under the epic
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this bead exists. Link to the architecture or work-plan section it implements.
+      placeholder: |
+        Implements step N of the pipeline described in docs/architecture.md.
+        Required by epic #42 to enable …
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: Bullet list of what this bead will change. Keep it small enough for one agent run.
+      placeholder: |
+        - Add `foo.py` module that does X
+        - Wire X into the pipeline entrypoint
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Explicitly list adjacent work that belongs to other beads.
+      placeholder: |
+        - Refactor of unrelated module Y
+        - Dashboard wiring (separate bead)
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: Checklist of observable, testable outcomes. The bead is not done until every box is checked.
+      value: |
+        - [ ] …
+        - [ ] …
+        - [ ] …
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Bead dependencies
+      description: |
+        Use GitHub's native cross-references so the issue tracker renders the relationships.
+        Use `Depends on #NNN` for beads that must merge first, and `Blocks #NNN` for beads
+        that wait on this one. Leave blank only if this bead truly has no predecessors.
+      placeholder: |
+        Depends on #12
+        Depends on #15
+        Blocks #20
+    validations:
+      required: true
+
+  - type: textarea
+    id: test_plan
+    attributes:
+      label: Test plan
+      description: How the new behavior will be exercised. Every code path added or changed must be covered.
+      placeholder: |
+        - Unit tests for new module under `tests/…`
+        - Integration test exercising the pipeline path end-to-end on a fixture AOI
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: definition_of_done
+    attributes:
+      label: Definition of done
+      description: All boxes must be checked before the PR for this bead is merged.
+      options:
+        - label: Acceptance criteria above are all checked
+          required: true
+        - label: New and changed code is fully covered by tests
+          required: true
+        - label: All tests pass locally and in CI
+          required: true
+        - label: Linked to its parent epic via sub-issue or task list
+          required: true
+        - label: Bead dependencies are recorded with `Depends on` / `Blocks` references
+          required: true
+        - label: Documentation updated where the change is user- or operator-visible
+          required: true
