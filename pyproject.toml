@@ -1,0 +1,22 @@
+[project]
+name = "open-forest-sentinel"
+version = "0.0.0"
+description = "Generalized, low-cost forest disturbance monitoring and evidence system for a configurable Area of Interest."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/forest_sentinel"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
