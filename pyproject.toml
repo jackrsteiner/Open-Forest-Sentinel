@@ -13,6 +13,7 @@ dependencies = [
     "numpy>=1.26",
     "rasterio>=1.3",
     "rio-cogeo>=5.3",
+    "earthaccess>=0.10",
 ]
 
 [project.scripts]
@@ -50,5 +51,12 @@ mypy_path = "src"
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
-module = ["geoalchemy2.*", "shapely.*", "rasterio.*", "rio_cogeo.*", "affine.*"]
+module = [
+    "geoalchemy2.*",
+    "shapely.*",
+    "rasterio.*",
+    "rio_cogeo.*",
+    "affine.*",
+    "earthaccess.*",
+]
 ignore_missing_imports = true

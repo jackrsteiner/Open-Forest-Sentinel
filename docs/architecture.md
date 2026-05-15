@@ -143,6 +143,15 @@ A processing/detection method record. Every derived artifact (`index_raster`, `c
 
 Constraints: `UNIQUE (name, version)`. A `(name, version)` identity is bound to its parameters — `get_or_create_methodology_version` raises `MethodologyVersionMismatch` rather than create a divergent row, so methodology versions stay stable provenance records.
 
+### 5.1.1 HLS imagery access (introduced by bead #38)
+
+NASA HLS analysis-ready imagery (collections `HLSL30` for Landsat 8/9 and `HLSS30` for Sentinel-2, v2.0) is the optical-change input.
+
+- **Library:** `earthaccess` — NASA's official Earthdata client — for CMR search and authenticated access. Discovery (CMR search) is auth-free; authenticated band access is added later when indices are computed.
+- **Module:** `forest_sentinel.hls` exposes `discover_observations(session, aoi, *, since, until)` which searches both HLS short names over the AOI's bounding box, parses each granule's UMM into a small `HlsGranule`, and records new `observation` rows. Re-runs are idempotent: the `observation` `(aoi_id, source_scene_id)` unique constraint dedupes.
+- **Earthdata Login (auth):** required only for reading band assets, not discovery. The downstream beads (E4 indices, …) will read credentials from environment variables (`EARTHDATA_USERNAME` / `EARTHDATA_PASSWORD`, or `EARTHDATA_TOKEN`), or from a `~/.netrc` entry — the standard `earthaccess` discovery order.
+- **Tests:** never make live NASA calls; CI and local runs stub `earthaccess.search_data` and parse synthetic UMM payloads.
+
 ### 5.2 Raster storage (introduced by bead #36)
 
 Index and change rasters are written as Cloud Optimized GeoTIFFs (COGs) through a small storage interface so the backend can be swapped without touching pipeline code.
