@@ -236,6 +236,17 @@ Defaults (configurable via the methodology's `parameters`):
 | `delta_nbr_threshold` | `-0.25`     | NBR drop required to flag a pixel as disturbed.        |
 | `min_area_m2`         | `4_500`     | Minimum patch area (≈ 0.45 ha; ≈ 50 m × 90 m).         |
 
+### 5.1.2 Slice 1 pipeline orchestration (introduced by bead #42)
+
+`forest-sentinel run --aoi PATH --since DATE --until DATE [--band-root PATH]` threads the Slice 1 stages end-to-end inside a single transactional session:
+
+1. **AOI** — load the GeoJSON config; reuse the existing `aoi` row by name, or persist a new one. The CLI is idempotent at the AOI level.
+2. **Methodology** — `get_or_create_methodology_version` resolves the row that derived artifacts will reference; defaults are `optical-change` / `0.1`.
+3. **Discovery** — `discover_observations` searches HLS via `earthaccess` and records new `observation`s (no auth required for CMR search).
+4. **Index → change → candidate** — when `--band-root` is supplied, iterate observations in `acquired_at` order and run `compute_indices_for_observation` → `compute_change_products_for_observation` → `extract_candidates_for_change_raster`. Candidate extraction is **NBR-driven** (bead #41); ΔNDVI is kept as supporting evidence but does not directly emit candidates.
+
+AOI bboxes are passed everywhere in **WGS 84**. The `read_band_window` helper reprojects the bbox to the band raster's native CRS (typically UTM for HLS) before windowing, so the AOI–HLS-tile join is correct regardless of zone. The CLI prints a per-stage summary and is the Slice 1 hallway test: re-running over a small AOI produces eyeball-able `disturbance_candidate` polygons in PostGIS (`SELECT ST_AsGeoJSON(geometry) …`).
+
 ### 5.2 Raster storage (introduced by bead #36)
 
 Index and change rasters are written as Cloud Optimized GeoTIFFs (COGs) through a small storage interface so the backend can be swapped without touching pipeline code.

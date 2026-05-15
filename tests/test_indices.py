@@ -33,7 +33,14 @@ _TRANSFORM = Affine.translation(500_000.0, 9_300_000.0) * Affine.scale(30.0, -30
 _CRS = CRS.from_epsg(32755)
 _HEIGHT = 8
 _WIDTH = 8
-_AOI_BBOX = (
+
+# Same bbox as the synthetic raster, expressed in WGS 84 so it matches the
+# real `compute_indices_for_observation` contract (AOI bbox is WGS 84).
+from rasterio.warp import transform_bounds  # noqa: E402
+
+_AOI_BBOX = transform_bounds(
+    _CRS,
+    "EPSG:4326",
     500_000.0,
     9_300_000.0 - _HEIGHT * 30.0,
     500_000.0 + _WIDTH * 30.0,
@@ -196,7 +203,7 @@ def test_compute_indices_writes_cogs_and_rows(db_session: Session, tmp_path: Pat
         methodology=methodology,
         storage=storage,
         resolver=resolver,
-        aoi_bbox=_AOI_BBOX,
+        aoi_bbox_wgs84=_AOI_BBOX,
         aoi_name="Example AOI",
     )
     db_session.commit()
@@ -235,7 +242,7 @@ def test_compute_indices_is_idempotent(db_session: Session, tmp_path: Path) -> N
         methodology=methodology,
         storage=storage,
         resolver=resolver,
-        aoi_bbox=_AOI_BBOX,
+        aoi_bbox_wgs84=_AOI_BBOX,
         aoi_name="Example AOI",
     )
     db_session.commit()
@@ -245,7 +252,7 @@ def test_compute_indices_is_idempotent(db_session: Session, tmp_path: Path) -> N
         methodology=methodology,
         storage=storage,
         resolver=resolver,
-        aoi_bbox=_AOI_BBOX,
+        aoi_bbox_wgs84=_AOI_BBOX,
         aoi_name="Example AOI",
     )
     db_session.commit()
@@ -269,7 +276,7 @@ def test_compute_indices_rejects_unknown_index_type(db_session: Session, tmp_pat
             methodology=methodology,
             storage=storage,
             resolver=resolver,
-            aoi_bbox=_AOI_BBOX,
+            aoi_bbox_wgs84=_AOI_BBOX,
             aoi_name="Example AOI",
             index_types=["mystery"],
         )

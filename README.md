@@ -172,17 +172,22 @@ Its practical advantage depends not only on low cost, but also on **temporal cur
 
 ## Usage
 
-An AOI is a GeoJSON file containing a single `Feature` whose geometry is the area to monitor and whose `properties.name` identifies it — see `examples/aoi-sample.geojson`. Run the pipeline for a configured AOI with:
+An AOI is a GeoJSON file containing a single `Feature` whose geometry is the area to monitor and whose `properties.name` identifies it — see `examples/aoi-sample.geojson`. Run the Slice 1 pipeline (HLS discovery → NBR/NDVI → ΔNBR/ΔNDVI vs. trailing-median baseline → disturbance-candidate polygons) with:
 
 ```sh
-uv run forest-sentinel run --aoi examples/aoi-sample.geojson
+uv run forest-sentinel run \
+  --aoi examples/aoi-sample.geojson \
+  --since 2026-01-01 --until 2026-01-31 \
+  --band-root /data/hls-bands
 ```
 
-This loads and validates the AOI, persists it to the database, and prints a summary. Slice 0 — the walking skeleton — stops here; later slices add imagery access, change detection, and the dashboard (see `docs/work-plan.md`).
+`--since` / `--until` set the HLS time window. `--band-root` points at staged HLS band rasters laid out as `{band-root}/{source_scene_id}/{ASSET}.tif` (e.g. `B04.tif`, `B05.tif`, `B07.tif` for HLSL30); if omitted, the run stops after observation discovery. `--methodology-name` / `--methodology-version` (default `optical-change` / `0.1`) tag every derived artifact for provenance. The command is idempotent: re-running over the same AOI and time window reuses the existing rows and upserts derived artifacts.
+
+HLS discovery uses NASA's `earthaccess` library; CMR search is auth-free, while reading band assets directly from NASA-LP-DAAC needs Earthdata Login credentials (`EARTHDATA_USERNAME` / `EARTHDATA_PASSWORD`, or `EARTHDATA_TOKEN`, or `~/.netrc`). Output COGs are written under `FOREST_SENTINEL_COG_ROOT` (default `data/cogs/`); see `docs/architecture.md` for layout and schema details.
 
 ## Development
 
-In **GitHub Codespaces**, opening the repository builds a devcontainer that installs dependencies and starts the database automatically, so `uv run forest-sentinel run --aoi examples/aoi-sample.geojson` works immediately. The steps below cover local development.
+In **GitHub Codespaces**, opening the repository builds a devcontainer that installs dependencies and starts the database automatically, so `uv run forest-sentinel run --aoi examples/aoi-sample.geojson --since 2026-01-01 --until 2026-01-31` works immediately (band-dependent stages skipped until you stage HLS bands and pass `--band-root`). The steps below cover local development.
 
 The project targets **Python 3.12** and uses [uv](https://docs.astral.sh/uv/) for dependency and environment management. Tests that touch the database need PostgreSQL + PostGIS running locally, provided by `docker compose`.
 

@@ -28,6 +28,7 @@ import numpy as np
 import rasterio
 from affine import Affine
 from rasterio.crs import CRS
+from rasterio.warp import transform_bounds
 from rasterio.windows import from_bounds
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -105,10 +106,22 @@ class BandRead:
     crs: CRS
 
 
-def read_band_window(path: str, bbox: tuple[float, float, float, float]) -> BandRead:
-    """Read ``path`` AOI-windowed; mask the HLS fill value; scale to reflectance."""
+WGS84 = "EPSG:4326"
+
+
+def read_band_window(path: str, bbox_wgs84: tuple[float, float, float, float]) -> BandRead:
+    """Read ``path`` clipped to ``bbox_wgs84``; mask fill; scale to reflectance.
+
+    ``bbox_wgs84`` is always in WGS 84 (EPSG:4326) — matching how AOIs are
+    stored. The raster's native CRS (typically UTM for HLS) is read off the
+    file and the bbox is reprojected before windowing.
+    """
     with rasterio.open(path) as src:
-        window = from_bounds(*bbox, transform=src.transform)
+        if src.crs is None or src.crs == CRS.from_string(WGS84):
+            west, south, east, north = bbox_wgs84
+        else:
+            west, south, east, north = transform_bounds(WGS84, src.crs, *bbox_wgs84)
+        window = from_bounds(west, south, east, north, transform=src.transform)
         raw = src.read(1, window=window, boundless=False)
         transform = src.window_transform(window)
         crs = src.crs
@@ -141,19 +154,22 @@ def compute_indices_for_observation(
     methodology: MethodologyVersion,
     storage: Storage,
     resolver: BandResolver,
-    aoi_bbox: tuple[float, float, float, float],
+    aoi_bbox_wgs84: tuple[float, float, float, float],
     aoi_name: str,
     index_types: Iterable[str] = INDEX_TYPES,
 ) -> list[IndexRaster]:
     """Compute the configured indices for ``observation`` and persist their rasters.
 
+    ``aoi_bbox_wgs84`` is in WGS 84; each band read reprojects it to the
+    band's native CRS before windowing.
+
     Re-running with the same ``(observation, index_type, methodology)``
     overwrites the COG on disk and updates the existing ``index_raster``
     row's ``cog_path`` rather than creating a duplicate.
     """
-    red = read_band_window(resolver.resolve(observation, HlsBand.RED), aoi_bbox)
-    nir = read_band_window(resolver.resolve(observation, HlsBand.NIR), aoi_bbox)
-    swir2 = read_band_window(resolver.resolve(observation, HlsBand.SWIR2), aoi_bbox)
+    red = read_band_window(resolver.resolve(observation, HlsBand.RED), aoi_bbox_wgs84)
+    nir = read_band_window(resolver.resolve(observation, HlsBand.NIR), aoi_bbox_wgs84)
+    swir2 = read_band_window(resolver.resolve(observation, HlsBand.SWIR2), aoi_bbox_wgs84)
 
     arrays = {
         "nbr": compute_nbr(nir.data, swir2.data),
