@@ -107,3 +107,35 @@ class MethodologyVersion(Base):
     __table_args__ = (
         UniqueConstraint("name", "version", name="uq_methodology_version_name_version"),
     )
+
+
+class IndexRaster(Base):
+    """A computed index raster (NBR or NDVI) for one observation."""
+
+    __tablename__ = "index_raster"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observation.id", name="fk_index_raster_observation_id_observation"),
+        nullable=False,
+    )
+    methodology_version_id: Mapped[int] = mapped_column(
+        ForeignKey("methodology_version.id", name="fk_index_raster_methodology_version_id"),
+        nullable=False,
+    )
+    index_type: Mapped[str] = mapped_column(String, nullable=False)
+    cog_path: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id",
+            "index_type",
+            "methodology_version_id",
+            name="uq_index_raster_observation_index_methodology",
+        ),
+    )

@@ -152,6 +152,28 @@ NASA HLS analysis-ready imagery (collections `HLSL30` for Landsat 8/9 and `HLSS3
 - **Earthdata Login (auth):** required only for reading band assets, not discovery. The downstream beads (E4 indices, …) will read credentials from environment variables (`EARTHDATA_USERNAME` / `EARTHDATA_PASSWORD`, or `EARTHDATA_TOKEN`), or from a `~/.netrc` entry — the standard `earthaccess` discovery order.
 - **Tests:** never make live NASA calls; CI and local runs stub `earthaccess.search_data` and parse synthetic UMM payloads.
 
+#### `index_raster` (introduced by bead #39)
+
+A derived NBR or NDVI raster computed for one `observation` under a specific `methodology_version`. The COG itself lives under the storage root (§5.2); the row records its provenance and location.
+
+| Column                   | Type          | Notes                                                       |
+|--------------------------|---------------|-------------------------------------------------------------|
+| `id`                     | `integer`     | Primary key.                                                |
+| `observation_id`         | `integer`     | Foreign key → `observation.id`.                             |
+| `methodology_version_id` | `integer`     | Foreign key → `methodology_version.id`.                     |
+| `index_type`             | `text`        | `nbr` or `ndvi`.                                            |
+| `cog_path`               | `text`        | Storage path returned by `Storage.write_cog`.               |
+| `created_at`             | `timestamptz` | Row insertion time (server default `now()`).                |
+
+Constraints: `UNIQUE (observation_id, index_type, methodology_version_id)` so re-running index computation for the same observation under the same methodology updates the existing row instead of duplicating it.
+
+Index math, with HLS surface reflectance in the [-9999 → fill, else int16 × 0.0001 = reflectance] convention:
+
+- `NBR  = (NIR  - SWIR2) / (NIR  + SWIR2)` (HLSL30 NIR=B05/SWIR2=B07; HLSS30 NIR=B8A/SWIR2=B12).
+- `NDVI = (NIR  - RED)   / (NIR  + RED)`.
+
+Fill pixels become `NaN`; zero denominators become `NaN`; `NaN` propagates so downstream change detection can ignore missing pixels honestly. Band reading is decoupled through a `BandResolver` protocol so production code uses an HLS-aware (authenticated) resolver while tests use a local-file resolver against fixtures.
+
 ### 5.2 Raster storage (introduced by bead #36)
 
 Index and change rasters are written as Cloud Optimized GeoTIFFs (COGs) through a small storage interface so the backend can be swapped without touching pipeline code.

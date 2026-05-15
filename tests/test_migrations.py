@@ -93,3 +93,40 @@ def test_downgrade_removes_methodology_version_table(
     command.downgrade(alembic_config, "base")
 
     assert "methodology_version" not in inspect(clean_database).get_table_names()
+
+
+def test_migrations_create_index_raster_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "index_raster" in inspector.get_table_names()
+
+    columns = {column["name"] for column in inspector.get_columns("index_raster")}
+    assert {
+        "id",
+        "observation_id",
+        "methodology_version_id",
+        "index_type",
+        "cog_path",
+        "created_at",
+    } <= columns
+
+    fk_targets = {fk["referred_table"] for fk in inspector.get_foreign_keys("index_raster")}
+    assert {"observation", "methodology_version"} <= fk_targets
+
+    unique_constraints = inspector.get_unique_constraints("index_raster")
+    assert any(
+        sorted(uc["column_names"]) == ["index_type", "methodology_version_id", "observation_id"]
+        for uc in unique_constraints
+    )
+
+
+def test_downgrade_removes_index_raster_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "base")
+
+    assert "index_raster" not in inspect(clean_database).get_table_names()
