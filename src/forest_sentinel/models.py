@@ -4,12 +4,13 @@ Each derived artifact in the system is traceable to its sources; the schema is
 introduced incrementally, one bead at a time.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from geoalchemy2 import Geometry
 from geoalchemy2.elements import WKBElement
 from sqlalchemy import (
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -189,4 +190,44 @@ class ChangeRasterSource(Base):
     index_raster_id: Mapped[int] = mapped_column(
         ForeignKey("index_raster.id", name="fk_change_raster_source_ir_id"),
         primary_key=True,
+    )
+
+
+class DisturbanceCandidate(Base):
+    """A polygon extracted from a change_raster: a candidate forest disturbance."""
+
+    __tablename__ = "disturbance_candidate"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    change_raster_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "change_raster.id",
+            name="fk_disturbance_candidate_change_raster_id",
+        ),
+        nullable=False,
+    )
+    methodology_version_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "methodology_version.id",
+            name="fk_disturbance_candidate_methodology_version_id",
+        ),
+        nullable=False,
+    )
+    geometry: Mapped[WKBElement] = mapped_column(
+        Geometry(geometry_type="POLYGON", srid=AOI_SRID),
+        nullable=False,
+    )
+    detected_at: Mapped[date] = mapped_column(Date, nullable=False)
+    area_m2: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_disturbance_candidate_change_raster_id",
+            "change_raster_id",
+        ),
     )

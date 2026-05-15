@@ -205,6 +205,37 @@ Algorithm:
 - Re-running the same `(observation, change_type, methodology)` upserts: the COG and `change_raster_source` rows are replaced, not duplicated.
 - A fresh AOI with no prior observations produces no change rasters yet — the index type is skipped silently. The next run with one more observation produces deltas.
 
+#### `disturbance_candidate` (introduced by bead #41)
+
+A polygon extracted from a `change_raster`: a candidate forest disturbance. Each candidate carries provenance back to the change raster it was extracted from and to the methodology version that produced it (which records the exact thresholds in its `parameters`).
+
+| Column                   | Type                  | Notes                                          |
+|--------------------------|-----------------------|------------------------------------------------|
+| `id`                     | `integer`             | Primary key.                                   |
+| `change_raster_id`       | `integer`             | Foreign key → `change_raster.id`.              |
+| `methodology_version_id` | `integer`             | Foreign key → `methodology_version.id`.        |
+| `geometry`               | `geometry(POLYGON, 4326)` | Polygon stored in WGS 84.                   |
+| `detected_at`            | `date`                | Acquisition date of the source observation.    |
+| `area_m2`                | `float`               | Polygon area in square metres (native CRS).    |
+| `created_at`             | `timestamptz`         | Row insertion time (server default `now()`).   |
+
+Index: `(change_raster_id)` so candidates can be enumerated per change raster quickly.
+
+Algorithm:
+
+- Read the change raster; build a binary mask of pixels where `delta <= delta_nbr_threshold` (an NBR drop of at least `-threshold`). NaN pixels never satisfy the comparison and so are excluded automatically.
+- Polygonize the mask with `rasterio.features.shapes`, keeping only shapes with `value == 1`.
+- Drop polygons smaller than `min_area_m2`, computed in the raster's native (projected) CRS so the area is in real square metres.
+- Reproject surviving polygons to WGS 84 with `pyproj.Transformer.from_crs(..., 4326)` and persist.
+- Re-runs with the same `(change_raster, methodology)` delete and re-insert candidates so the row set reflects the latest parameters.
+
+Defaults (configurable via the methodology's `parameters`):
+
+| Parameter             | Default     | Meaning                                                |
+|-----------------------|-------------|--------------------------------------------------------|
+| `delta_nbr_threshold` | `-0.25`     | NBR drop required to flag a pixel as disturbed.        |
+| `min_area_m2`         | `4_500`     | Minimum patch area (≈ 0.45 ha; ≈ 50 m × 90 m).         |
+
 ### 5.2 Raster storage (introduced by bead #36)
 
 Index and change rasters are written as Cloud Optimized GeoTIFFs (COGs) through a small storage interface so the backend can be swapped without touching pipeline code.

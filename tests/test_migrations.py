@@ -171,3 +171,48 @@ def test_downgrade_removes_change_raster_tables(
     tables = inspect(clean_database).get_table_names()
     assert "change_raster" not in tables
     assert "change_raster_source" not in tables
+
+
+def test_migrations_create_disturbance_candidate_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "disturbance_candidate" in inspector.get_table_names()
+
+    columns = {column["name"] for column in inspector.get_columns("disturbance_candidate")}
+    assert {
+        "id",
+        "change_raster_id",
+        "methodology_version_id",
+        "geometry",
+        "detected_at",
+        "area_m2",
+        "created_at",
+    } <= columns
+
+    fk_targets = {
+        fk["referred_table"] for fk in inspector.get_foreign_keys("disturbance_candidate")
+    }
+    assert {"change_raster", "methodology_version"} <= fk_targets
+
+    with clean_database.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT type, srid FROM geometry_columns "
+                "WHERE f_table_name = 'disturbance_candidate' "
+                "AND f_geometry_column = 'geometry'"
+            )
+        ).one()
+    assert row[0] == "POLYGON"
+    assert row[1] == 4326
+
+
+def test_downgrade_removes_disturbance_candidate_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "base")
+
+    assert "disturbance_candidate" not in inspect(clean_database).get_table_names()
