@@ -129,6 +129,20 @@ One imagery acquisition over an AOI — the source record every derived artifact
 
 Constraints and indexes: `UNIQUE (aoi_id, source_scene_id)` so re-running HLS discovery is idempotent per AOI; `INDEX (aoi_id, acquired_at)` for "observations for this AOI in this time window" queries.
 
+#### `methodology_version` (introduced by bead #35)
+
+A processing/detection method record. Every derived artifact (`index_raster`, `change_raster`, `disturbance_candidate`) references one of these rows so the inputs and parameters that produced it can always be reconstructed.
+
+| Column       | Type          | Notes                                                        |
+|--------------|---------------|--------------------------------------------------------------|
+| `id`         | `integer`     | Primary key.                                                 |
+| `name`       | `text`        | Method identifier, e.g. `optical-change`.                    |
+| `version`    | `text`        | Method version string, e.g. `0.1`.                           |
+| `parameters` | `jsonb`       | Method parameters; empty object allowed.                     |
+| `created_at` | `timestamptz` | Row insertion time (server default `now()`).                 |
+
+Constraints: `UNIQUE (name, version)`. A `(name, version)` identity is bound to its parameters — `get_or_create_methodology_version` raises `MethodologyVersionMismatch` rather than create a divergent row, so methodology versions stay stable provenance records.
+
 ## 6. Cross-cutting properties
 
 - **AOI-first configurability.** Switching deployment to a new AOI is a configuration change, not a code change.

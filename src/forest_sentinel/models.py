@@ -5,6 +5,7 @@ introduced incrementally, one bead at a time.
 """
 
 from datetime import datetime
+from typing import Any
 
 from geoalchemy2 import Geometry
 from geoalchemy2.elements import WKBElement
@@ -18,6 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Areas of interest are stored in WGS 84 (EPSG:4326); loaders reproject on ingest.
@@ -84,4 +86,24 @@ class Observation(Base):
             name="uq_observation_aoi_id_source_scene_id",
         ),
         Index("ix_observation_aoi_id_acquired_at", "aoi_id", "acquired_at"),
+    )
+
+
+class MethodologyVersion(Base):
+    """A processing/detection method record; derived artifacts reference one of these."""
+
+    __tablename__ = "methodology_version"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[str] = mapped_column(String, nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_methodology_version_name_version"),
     )
