@@ -14,3 +14,6 @@ dist/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Local raster outputs (default FOREST_SENTINEL_COG_ROOT)
+data/cogs/

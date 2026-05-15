@@ -143,6 +143,15 @@ A processing/detection method record. Every derived artifact (`index_raster`, `c
 
 Constraints: `UNIQUE (name, version)`. A `(name, version)` identity is bound to its parameters — `get_or_create_methodology_version` raises `MethodologyVersionMismatch` rather than create a divergent row, so methodology versions stay stable provenance records.
 
+### 5.2 Raster storage (introduced by bead #36)
+
+Index and change rasters are written as Cloud Optimized GeoTIFFs (COGs) through a small storage interface so the backend can be swapped without touching pipeline code.
+
+- **Interface:** `forest_sentinel.storage.Storage` — `path_for(key)` and `write_cog(key, data, transform, crs, nodata)`. `Storage` is a `typing.Protocol`; one implementation today (`LocalStorage`), with Google Cloud Storage as the future path.
+- **Layout:** `{root}/{aoi}/{product}/{YYYY-MM-DD}/{filename}`. Free-form `aoi` and `product` names are sanitized to a safe path component (alphanumerics, `-`, `_`); other characters become `_`.
+- **Root:** configurable via the `FOREST_SENTINEL_COG_ROOT` environment variable; defaults to `data/cogs/` (relative).
+- **COG production:** `rasterio` stages an in-memory GeoTIFF; `rio-cogeo` translates it to a conformant COG (tiled, with overviews, IFD-ordered) under the DEFLATE profile.
+
 ## 6. Cross-cutting properties
 
 - **AOI-first configurability.** Switching deployment to a new AOI is a configuration change, not a code change.
