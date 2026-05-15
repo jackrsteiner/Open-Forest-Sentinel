@@ -130,3 +130,44 @@ def test_downgrade_removes_index_raster_table(
     command.downgrade(alembic_config, "base")
 
     assert "index_raster" not in inspect(clean_database).get_table_names()
+
+
+def test_migrations_create_change_raster_tables(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    tables = inspector.get_table_names()
+    assert "change_raster" in tables
+    assert "change_raster_source" in tables
+
+    cr_columns = {column["name"] for column in inspector.get_columns("change_raster")}
+    assert {
+        "id",
+        "observation_id",
+        "methodology_version_id",
+        "change_type",
+        "cog_path",
+        "created_at",
+    } <= cr_columns
+
+    crs_columns = {column["name"] for column in inspector.get_columns("change_raster_source")}
+    assert {"change_raster_id", "index_raster_id"} <= crs_columns
+
+    unique_constraints = inspector.get_unique_constraints("change_raster")
+    assert any(
+        sorted(uc["column_names"]) == ["change_type", "methodology_version_id", "observation_id"]
+        for uc in unique_constraints
+    )
+
+
+def test_downgrade_removes_change_raster_tables(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "base")
+
+    tables = inspect(clean_database).get_table_names()
+    assert "change_raster" not in tables
+    assert "change_raster_source" not in tables

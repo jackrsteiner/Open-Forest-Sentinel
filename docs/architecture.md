@@ -174,6 +174,37 @@ Index math, with HLS surface reflectance in the [-9999 → fill, else int16 × 0
 
 Fill pixels become `NaN`; zero denominators become `NaN`; `NaN` propagates so downstream change detection can ignore missing pixels honestly. Band reading is decoupled through a `BandResolver` protocol so production code uses an HLS-aware (authenticated) resolver while tests use a local-file resolver against fixtures.
 
+#### `change_raster` and `change_raster_source` (introduced by bead #40)
+
+A ΔNBR or ΔNDVI raster: current observation's index minus a per-pixel **trailing-median baseline** built from prior valid observations under the same methodology. Provenance back to every contributing `index_raster` (the current one plus the baseline window) is captured in a `change_raster_source` join table.
+
+`change_raster`:
+
+| Column                   | Type          | Notes                                                       |
+|--------------------------|---------------|-------------------------------------------------------------|
+| `id`                     | `integer`     | Primary key.                                                |
+| `observation_id`         | `integer`     | Foreign key → `observation.id` (the *current* observation). |
+| `methodology_version_id` | `integer`     | Foreign key → `methodology_version.id`.                     |
+| `change_type`            | `text`        | `delta_nbr` or `delta_ndvi`.                                |
+| `cog_path`               | `text`        | Storage path of the delta COG.                              |
+| `created_at`             | `timestamptz` | Row insertion time (server default `now()`).                |
+
+Unique: `(observation_id, change_type, methodology_version_id)`.
+
+`change_raster_source` (many-to-many provenance, primary key on the pair):
+
+| Column             | Type      | Notes                                              |
+|--------------------|-----------|----------------------------------------------------|
+| `change_raster_id` | `integer` | Foreign key → `change_raster.id` (`ON DELETE CASCADE`). |
+| `index_raster_id`  | `integer` | Foreign key → `index_raster.id`.                   |
+
+Algorithm:
+
+- **Baseline window size** is configured via the methodology's `baseline_window` parameter (default `5`). The window contains the *prior* observations only, ordered by `acquired_at` descending and limited to N.
+- For each requested index type (`nbr`, `ndvi`), read the current and baseline COGs (must share shape/transform/CRS), compute `baseline = np.nanmedian(stack, axis=0)`, then `delta = current - baseline`, and write the delta as a float COG (NaN nodata).
+- Re-running the same `(observation, change_type, methodology)` upserts: the COG and `change_raster_source` rows are replaced, not duplicated.
+- A fresh AOI with no prior observations produces no change rasters yet — the index type is skipped silently. The next run with one more observation produces deltas.
+
 ### 5.2 Raster storage (introduced by bead #36)
 
 Index and change rasters are written as Cloud Optimized GeoTIFFs (COGs) through a small storage interface so the backend can be swapped without touching pipeline code.

@@ -139,3 +139,54 @@ class IndexRaster(Base):
             name="uq_index_raster_observation_index_methodology",
         ),
     )
+
+
+class ChangeRaster(Base):
+    """A ΔNBR or ΔNDVI raster for one observation: current minus trailing-median baseline."""
+
+    __tablename__ = "change_raster"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observation.id", name="fk_change_raster_observation_id_observation"),
+        nullable=False,
+    )
+    methodology_version_id: Mapped[int] = mapped_column(
+        ForeignKey("methodology_version.id", name="fk_change_raster_methodology_version_id"),
+        nullable=False,
+    )
+    change_type: Mapped[str] = mapped_column(String, nullable=False)
+    cog_path: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id",
+            "change_type",
+            "methodology_version_id",
+            name="uq_change_raster_observation_change_methodology",
+        ),
+    )
+
+
+class ChangeRasterSource(Base):
+    """Many-to-many provenance: which index_rasters contributed to a change_raster."""
+
+    __tablename__ = "change_raster_source"
+
+    change_raster_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "change_raster.id",
+            name="fk_change_raster_source_cr_id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    index_raster_id: Mapped[int] = mapped_column(
+        ForeignKey("index_raster.id", name="fk_change_raster_source_ir_id"),
+        primary_key=True,
+    )
