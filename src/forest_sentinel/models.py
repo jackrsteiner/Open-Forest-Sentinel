@@ -1,16 +1,23 @@
 """SQLAlchemy domain models.
 
 Each derived artifact in the system is traceable to its sources; the schema is
-introduced incrementally, one bead at a time. This module currently defines the
-``aoi`` table — the configured area of interest the rest of the pipeline runs
-against.
+introduced incrementally, one bead at a time.
 """
 
 from datetime import datetime
 
 from geoalchemy2 import Geometry
 from geoalchemy2.elements import WKBElement
-from sqlalchemy import DateTime, MetaData, String, func
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    MetaData,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Areas of interest are stored in WGS 84 (EPSG:4326); loaders reproject on ingest.
@@ -47,4 +54,34 @@ class Aoi(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+
+
+class Observation(Base):
+    """One imagery acquisition over an AOI; the source record for derived artifacts."""
+
+    __tablename__ = "observation"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    aoi_id: Mapped[int] = mapped_column(
+        ForeignKey("aoi.id", name="fk_observation_aoi_id_aoi"),
+        nullable=False,
+    )
+    sensor: Mapped[str] = mapped_column(String, nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_scene_id: Mapped[str] = mapped_column(String, nullable=False)
+    cloud_cover_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "aoi_id",
+            "source_scene_id",
+            name="uq_observation_aoi_id_source_scene_id",
+        ),
+        Index("ix_observation_aoi_id_acquired_at", "aoi_id", "acquired_at"),
     )

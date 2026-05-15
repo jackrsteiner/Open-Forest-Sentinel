@@ -86,7 +86,7 @@ Schema changes are versioned with **Alembic**; each migration is reviewed and sh
 
 ## 5. Core domain objects
 
-These are the entities the system tracks. Concrete schemas, columns, and relationships are **TBD** and will be resolved in implementation beads.
+These are the entities the system tracks. Concrete schemas are recorded in §5.1 as the beads that introduce them ship.
 
 | Object                  | Description                                                                              |
 |-------------------------|------------------------------------------------------------------------------------------|
@@ -108,6 +108,26 @@ Relationships implied by the pipeline:
 - `disturbance_candidate`s are tracked over time into `disturbance_event`s.
 - A `disturbance_event` has many `event_observation`s and may have `manual_review`s.
 - Every derived artifact is tagged with the `methodology_version` that produced it.
+
+### 5.1 Concrete schemas
+
+Each entry lands in the bead that introduces the table.
+
+#### `observation` (introduced by bead #37)
+
+One imagery acquisition over an AOI — the source record every derived artifact traces back to. Source data, not a derived artifact, so it carries no `methodology_version` reference.
+
+| Column                | Type          | Notes                                                       |
+|-----------------------|---------------|-------------------------------------------------------------|
+| `id`                  | `integer`     | Primary key.                                                |
+| `aoi_id`              | `integer`     | Foreign key → `aoi.id`.                                     |
+| `sensor`              | `text`        | HLS short name, e.g. `HLSL30` or `HLSS30`.                  |
+| `acquired_at`         | `timestamptz` | Scene acquisition timestamp.                                |
+| `source_scene_id`     | `text`        | Provider scene identifier (e.g. HLS granule id).            |
+| `cloud_cover_percent` | `float`       | Optional scene-level cloud cover, when reported.            |
+| `created_at`          | `timestamptz` | Row insertion time (server default `now()`).                |
+
+Constraints and indexes: `UNIQUE (aoi_id, source_scene_id)` so re-running HLS discovery is idempotent per AOI; `INDEX (aoi_id, acquired_at)` for "observations for this AOI in this time window" queries.
 
 ## 6. Cross-cutting properties
 
