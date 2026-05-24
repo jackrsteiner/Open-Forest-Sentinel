@@ -233,13 +233,39 @@ Its practical advantage depends not only on low cost, but also on **temporal cur
 
 ## Usage
 
-An AOI is a GeoJSON file containing a single `Feature` whose geometry is the area to monitor and whose `properties.name` identifies it — see `examples/aoi-sample.geojson`. Run the pipeline for a configured AOI with:
+An AOI is a GeoJSON file containing a single `Feature` whose geometry is the area to monitor and whose `properties.name` identifies it — see `examples/aoi-sample.geojson`.
+
+**Load an AOI (Slice 0 walking skeleton):**
 
 ```sh
 uv run forest-sentinel run --aoi examples/aoi-sample.geojson
 ```
 
-This loads and validates the AOI, persists it to the database, and prints a summary. Slice 0 — the walking skeleton — stops here; later slices add imagery access, change detection, and the dashboard (see `docs/work-plan.md`).
+This loads and validates the AOI, persists it to the database, and prints a summary.
+
+**Run the full Slice 1 optical-change pipeline** by adding a time window:
+
+```sh
+uv run forest-sentinel run \
+  --aoi examples/aoi-sample.geojson \
+  --since 2026-01-01 --until 2026-02-01 \
+  [--baseline-window 5] [--threshold -0.25] [--min-area 4500] \
+  [--methodology-name optical-change] [--methodology-version 1.0.0] \
+  [--gee-project YOUR_GCP_PROJECT]
+```
+
+This discovers HLS observations through Google Earth Engine, computes Fmask-masked NBR/NDVI and ΔNBR/ΔNDVI server-side, polygonizes disturbance candidates, exports COGs to local disk via a transient GCS staging area, persists everything to PostGIS, and prints a per-stage summary. The run is **idempotent** at the AOI level (it reuses the AOI row by name) and blocks while polling each Earth Engine export to completion.
+
+Earth Engine access requires a GCP service account with Earth Engine enabled and an EE-registered Cloud project. Configure:
+
+| Variable | Purpose |
+|----------|---------|
+| `FOREST_SENTINEL_GEE_PROJECT` | EE-registered GCP project id (or pass `--gee-project`) |
+| `FOREST_SENTINEL_GCS_STAGING_BUCKET` | transient bucket Earth Engine exports COGs into |
+| `FOREST_SENTINEL_COG_ROOT` | local canonical COG directory (default `data/cogs/`) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | service-account key (or run `earthengine authenticate`) |
+
+Later slices add event tracking and the dashboard (see `docs/work-plan.md`).
 
 ## Development
 

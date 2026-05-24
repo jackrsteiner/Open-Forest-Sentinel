@@ -129,10 +129,18 @@ def test_feature_with_area_sets_area_property() -> None:
     assert result is feature.set.return_value
 
 
+def _vectorize_result(delta: MagicMock) -> MagicMock:
+    """The MagicMock node returned by the threshold/vectorize chain's ``.filter(...)``."""
+    vectors = delta.lt.return_value.selfMask.return_value.reduceToVectors.return_value
+    filtered: MagicMock = vectors.map.return_value.filter.return_value
+    return filtered
+
+
 def test_threshold_and_vectorize_returns_features(fake_ee: MagicMock) -> None:
     delta = MagicMock(name="delta")
-    filtered = delta.lt.return_value.selfMask.return_value.reduceToVectors.return_value.map.return_value.filter.return_value
-    filtered.getInfo.return_value = {"features": [{"geometry": {}, "properties": {"area_m2": 5}}]}
+    _vectorize_result(delta).getInfo.return_value = {
+        "features": [{"geometry": {}, "properties": {"area_m2": 5}}]
+    }
 
     features = earthengine.threshold_and_vectorize(
         delta, threshold=-0.25, scale=30, region={"type": "Polygon"}, min_area_m2=4500
@@ -143,11 +151,8 @@ def test_threshold_and_vectorize_returns_features(fake_ee: MagicMock) -> None:
 
 def test_threshold_and_vectorize_handles_empty(fake_ee: MagicMock) -> None:
     delta = MagicMock(name="delta")
-    filtered = delta.lt.return_value.selfMask.return_value.reduceToVectors.return_value.map.return_value.filter.return_value
-    filtered.getInfo.return_value = None
-    assert (
-        earthengine.threshold_and_vectorize(
-            delta, threshold=-0.25, scale=30, region={}, min_area_m2=4500
-        )
-        == []
+    _vectorize_result(delta).getInfo.return_value = None
+    result = earthengine.threshold_and_vectorize(
+        delta, threshold=-0.25, scale=30, region={}, min_area_m2=4500
     )
+    assert result == []

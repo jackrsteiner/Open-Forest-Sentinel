@@ -7,6 +7,7 @@ the storage seam and recorded as a ``change_raster`` with provenance to the sour
 the methodology version, and every contributing ``index_raster`` (current + baseline).
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from geoalchemy2.shape import to_shape
@@ -34,6 +35,19 @@ CHANGE_TYPES: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class ChangeProduct:
+    """A persisted change raster plus the EE delta image it was computed from.
+
+    The pipeline (#42) reuses ``delta_image`` for candidate extraction (#41) without
+    rebuilding it.
+    """
+
+    change_type: str
+    change_raster: ChangeRaster
+    delta_image: Any
+
+
 def compute_change_products_for_observation(
     session: Session,
     *,
@@ -44,7 +58,7 @@ def compute_change_products_for_observation(
     baseline_window: int = DEFAULT_BASELINE_WINDOW,
     scale: int = indices.DEFAULT_SCALE_METERS,
     ee_module: Any = earthengine,
-) -> list[ChangeRaster]:
+) -> list[ChangeProduct]:
     """Compute and persist ΔNBR/ΔNDVI for one observation against its trailing baseline.
 
     An observation with no prior observations in the AOI has no baseline and is skipped
@@ -52,7 +66,7 @@ def compute_change_products_for_observation(
     """
     region = mapping(to_shape(aoi.geometry))
     date = observation.acquired_at.date().isoformat()
-    results: list[ChangeRaster] = []
+    results: list[ChangeProduct] = []
 
     for change_type, index_type in CHANGE_TYPES.items():
         baseline_obs = (
@@ -107,7 +121,9 @@ def compute_change_products_for_observation(
         )
         session.flush()
         _replace_sources(session, change.id, [row.id for row in index_rows])
-        results.append(change)
+        results.append(
+            ChangeProduct(change_type=change_type, change_raster=change, delta_image=delta)
+        )
 
     session.flush()
     return results

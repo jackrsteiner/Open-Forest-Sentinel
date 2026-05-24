@@ -15,6 +15,7 @@ from typing import Any
 from geoalchemy2.shape import from_shape
 from shapely.errors import ShapelyError
 from shapely.geometry import MultiPolygon, Polygon, shape
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forest_sentinel.models import AOI_SRID, Aoi
@@ -72,6 +73,18 @@ def persist_aoi(session: Session, config: AoiConfig) -> Aoi:
     session.add(aoi)
     session.flush()
     return aoi
+
+
+def get_or_create_aoi(session: Session, config: AoiConfig) -> Aoi:
+    """Return the AOI row for ``config.name``, creating it if absent.
+
+    Pipeline runs are idempotent at the AOI level: re-running over the same AOI reuses
+    its row rather than failing on the unique-name constraint.
+    """
+    existing = session.execute(select(Aoi).where(Aoi.name == config.name)).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    return persist_aoi(session, config)
 
 
 def _reject_non_wgs84_crs(document: dict[str, Any], path: Path) -> None:

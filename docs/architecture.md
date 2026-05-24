@@ -327,6 +327,29 @@ minimum area is enforced both server-side (the EE `Filter`) and client-side as a
 observation's `acquired_at`), `area_m2`, `created_at`; indexed on `change_raster_id`. Re-runs
 delete and re-insert the candidate set for a change raster so rows reflect the latest parameters.
 
+### 5.8 Pipeline orchestration
+
+**`forest_sentinel.pipeline`** (bead #42) threads the building blocks into one runnable slice:
+**discover → indices → change → candidates**. `forest-sentinel run --aoi <file> --since <d>
+--until <d>` initializes Earth Engine, builds the storage backend from the environment,
+get-or-creates the AOI (idempotent) and the methodology version (which pins the run parameters
+and EE script version), then calls `run_pipeline`, which:
+
+1. discovers HLS observations for the window,
+2. computes NBR/NDVI for every observation,
+3. computes ΔNBR/ΔNDVI against each observation's trailing baseline, and
+4. extracts candidate polygons from each ΔNBR product.
+
+Because compute runs in Earth Engine, every COG export is an **asynchronous batch task**; the
+storage seam blocks and polls each export to `COMPLETED` before the dependent step, so a single
+invocation drives the whole slice synchronously (a submit-and-return mode is a later bead if
+needed). `run_pipeline` returns a `PipelineSummary` with per-stage counts, which the CLI prints.
+Without `--since`/`--until`, `run` stays in the Slice 0 load-and-persist behavior. `run_pipeline`
+is pure orchestration over injectable building blocks, so the hallway test
+(`test_run_full_pipeline_produces_candidates`) exercises the full thread against a stubbed
+Earth Engine + storage and asserts a candidate polygon lands in PostGIS and dumps to valid
+WGS 84 GeoJSON — the mock-backed stand-in for a live run.
+
 ## 6. Cross-cutting properties
 
 - **AOI-first configurability.** Switching deployment to a new AOI is a configuration change, not a code change.
