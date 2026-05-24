@@ -29,3 +29,37 @@ def test_downgrade_removes_aoi_table(alembic_config: Config, clean_database: Eng
     command.downgrade(alembic_config, "base")
 
     assert "aoi" not in inspect(clean_database).get_table_names()
+
+
+def test_migrations_create_observation_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "observation" in inspector.get_table_names()
+
+    columns = {column["name"] for column in inspector.get_columns("observation")}
+    assert {
+        "id",
+        "aoi_id",
+        "sensor",
+        "acquired_at",
+        "source_scene_id",
+        "cloud_cover_percent",
+        "created_at",
+    } <= columns
+
+    unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("observation")
+    }
+    assert "uq_observation_aoi_id_source_scene_id" in unique_constraints
+
+
+def test_downgrade_removes_observation_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "base")
+
+    assert "observation" not in inspect(clean_database).get_table_names()

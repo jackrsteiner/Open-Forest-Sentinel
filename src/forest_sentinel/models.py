@@ -10,7 +10,16 @@ from datetime import datetime
 
 from geoalchemy2 import Geometry
 from geoalchemy2.elements import WKBElement
-from sqlalchemy import DateTime, MetaData, String, func
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    MetaData,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Areas of interest are stored in WGS 84 (EPSG:4326); loaders reproject on ingest.
@@ -43,6 +52,31 @@ class Aoi(Base):
         Geometry(geometry_type="MULTIPOLYGON", srid=AOI_SRID),
         nullable=False,
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class Observation(Base):
+    """One HLS imagery acquisition over an AOI: the source record every derived
+    artifact traces back to. Source data, so it carries no ``methodology_version``.
+    """
+
+    __tablename__ = "observation"
+    __table_args__ = (
+        # HLS discovery is idempotent per AOI: the same scene is recorded once.
+        UniqueConstraint("aoi_id", "source_scene_id", name="uq_observation_aoi_id_source_scene_id"),
+        Index("ix_observation_aoi_id_acquired_at", "aoi_id", "acquired_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    aoi_id: Mapped[int] = mapped_column(ForeignKey("aoi.id"), nullable=False)
+    sensor: Mapped[str] = mapped_column(String, nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_scene_id: Mapped[str] = mapped_column(String, nullable=False)
+    cloud_cover_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
