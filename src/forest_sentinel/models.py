@@ -1,16 +1,27 @@
 """SQLAlchemy domain models.
 
 Each derived artifact in the system is traceable to its sources; the schema is
-introduced incrementally, one bead at a time. This module currently defines the
-``aoi`` table — the configured area of interest the rest of the pipeline runs
-against.
+introduced incrementally, one bead at a time. See ``docs/architecture.md`` §5.1 for the
+per-table reference.
 """
 
 from datetime import datetime
+from typing import Any
 
 from geoalchemy2 import Geometry
 from geoalchemy2.elements import WKBElement
-from sqlalchemy import DateTime, MetaData, String, func
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Areas of interest are stored in WGS 84 (EPSG:4326); loaders reproject on ingest.
@@ -43,6 +54,172 @@ class Aoi(Base):
         Geometry(geometry_type="MULTIPOLYGON", srid=AOI_SRID),
         nullable=False,
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class Observation(Base):
+    """One HLS imagery acquisition over an AOI: the source record every derived
+    artifact traces back to. Source data, so it carries no ``methodology_version``.
+    """
+
+    __tablename__ = "observation"
+    __table_args__ = (
+        # HLS discovery is idempotent per AOI: the same scene is recorded once.
+        UniqueConstraint("aoi_id", "source_scene_id", name="uq_observation_aoi_id_source_scene_id"),
+        Index("ix_observation_aoi_id_acquired_at", "aoi_id", "acquired_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    aoi_id: Mapped[int] = mapped_column(ForeignKey("aoi.id"), nullable=False)
+    sensor: Mapped[str] = mapped_column(String, nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_scene_id: Mapped[str] = mapped_column(String, nullable=False)
+    cloud_cover_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class MethodologyVersion(Base):
+    """Provenance for a processing/detection method.
+
+    ``parameters`` captures the detection/processing parameters plus the Earth
+    Engine script version and input collection/asset IDs, so a run is
+    reproducible against Google's compute.
+    """
+
+    __tablename__ = "methodology_version"
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_methodology_version_name_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[str] = mapped_column(String, nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class IndexRaster(Base):
+    """A derived NBR or NDVI raster for one observation, stored as a COG."""
+
+    __tablename__ = "index_raster"
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id",
+            "index_type",
+            "methodology_version_id",
+            name="uq_index_raster_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observation_id: Mapped[int] = mapped_column(ForeignKey("observation.id"), nullable=False)
+    methodology_version_id: Mapped[int] = mapped_column(
+        ForeignKey("methodology_version.id"), nullable=False
+    )
+    index_type: Mapped[str] = mapped_column(String, nullable=False)
+    cog_path: Mapped[str] = mapped_column(String, nullable=False)
+    valid_pixel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class ChangeRaster(Base):
+    """A ΔNBR/ΔNDVI change product: current index minus the trailing-median baseline."""
+
+    __tablename__ = "change_raster"
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id",
+            "change_type",
+            "methodology_version_id",
+            name="uq_change_raster_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observation_id: Mapped[int] = mapped_column(ForeignKey("observation.id"), nullable=False)
+    methodology_version_id: Mapped[int] = mapped_column(
+        ForeignKey("methodology_version.id"), nullable=False
+    )
+    change_type: Mapped[str] = mapped_column(String, nullable=False)
+    cog_path: Mapped[str] = mapped_column(String, nullable=False)
+    baseline_window: Mapped[int] = mapped_column(Integer, nullable=False)
+    valid_pixel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class ChangeRasterSource(Base):
+    """Links a change raster to a contributing ``index_raster`` (current or baseline)."""
+
+    __tablename__ = "change_raster_source"
+
+    change_raster_id: Mapped[int] = mapped_column(
+        ForeignKey("change_raster.id", ondelete="CASCADE"), primary_key=True
+    )
+    index_raster_id: Mapped[int] = mapped_column(ForeignKey("index_raster.id"), primary_key=True)
+
+
+class DisturbanceCandidate(Base):
+    """A candidate disturbance polygon extracted from a change raster."""
+
+    __tablename__ = "disturbance_candidate"
+    __table_args__ = (Index("ix_disturbance_candidate_change_raster_id", "change_raster_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    change_raster_id: Mapped[int] = mapped_column(
+        ForeignKey("change_raster.id", ondelete="CASCADE"), nullable=False
+    )
+    methodology_version_id: Mapped[int] = mapped_column(
+        ForeignKey("methodology_version.id", name="fk_disturbance_candidate_methodology"),
+        nullable=False,
+    )
+    geometry: Mapped[WKBElement] = mapped_column(
+        Geometry(geometry_type="POLYGON", srid=AOI_SRID),
+        nullable=False,
+    )
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    area_m2: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class QualityMask(Base):
+    """Per-observation QA coverage from Fmask masking.
+
+    One row per observation (``observation_id`` is the primary key); records the
+    valid-pixel fraction so downstream products and the dashboard can distinguish
+    strong evidence from obscured observations.
+    """
+
+    __tablename__ = "quality_mask"
+
+    observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observation.id", ondelete="CASCADE"), primary_key=True
+    )
+    valid_pixel_fraction: Mapped[float] = mapped_column(Float, nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
