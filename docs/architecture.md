@@ -350,6 +350,46 @@ is pure orchestration over injectable building blocks, so the hallway test
 Earth Engine + storage and asserts a candidate polygon lands in PostGIS and dumps to valid
 WGS 84 GeoJSON — the mock-backed stand-in for a live run.
 
+### 5.9 Disturbance events (Slice 2)
+
+**`disturbance_event`** (migration `0008`) tracks a disturbance over time as the cumulative
+footprint of overlapping candidates: `id`, `aoi_id` (FK), `methodology_version_id` (FK, provenance
+per E9), `geometry` (PostGIS `MULTIPOLYGON` SRID 4326 — the unioned footprint), `status`
+(`new`/`ongoing`; `resolved`/`uncertain` arrive with scheduling and confidence in later slices),
+`first_detected_at`, `last_detected_at`, `created_at`.
+
+**`event_observation`** (migration `0008`) is one per-date measurement of an event, produced by a
+single candidate: `id`, `event_id` (FK, ON DELETE CASCADE), `disturbance_candidate_id` (FK),
+`observed_at`, `area_m2`, `growth_m2` (area added vs the prior measurement; null for the first),
+`created_at`. `UNIQUE (disturbance_candidate_id)` means each candidate contributes to exactly one
+measurement, which makes event tracking idempotent and incremental.
+
+**`forest_sentinel.events`** implements the **spatial-overlap** tracking algorithm
+(`track_events_for_aoi`): the AOI's not-yet-tracked candidates are processed in detection order;
+a candidate that intersects an existing event's footprint (PostGIS `ST_Intersects`) extends it,
+otherwise it starts a new event. The pipeline (`run_pipeline`) calls tracking as its final stage,
+so a single `forest-sentinel run` goes discover → indices → change → candidates → **events**, and
+the per-stage summary reports events created and event-observations tracked.
+
+### 5.10 Dashboard (Slice 2, E10)
+
+**`forest_sentinel.dashboard`** is a FastAPI app (`uv run uvicorn forest_sentinel.dashboard.app:app`)
+serving a read-only, unauthenticated view over PostGIS — the resolved Slice 2 decisions are
+**FastAPI + Leaflet**, **no auth**. Endpoints:
+
+- `GET /` — a static Leaflet map page (`static/index.html`) that consumes the API.
+- `GET /api/aois` — AOIs with event counts.
+- `GET /api/aois/{id}/events` — the AOI's events as a GeoJSON `FeatureCollection` (status, first/
+  last detected, latest area, observation count).
+- `GET /api/events/{id}` — event detail: footprint geometry, the measurement **timeline** (area +
+  growth), and **supporting evidence** (the source ΔNBR change rasters).
+
+Together these answer the six README "Product Deliverable" questions — where (geometry), when first
+detected, size, expansion rate (timeline growth), status, and supporting evidence. The database
+session is an injectable dependency (`get_session`), so endpoints are tested headlessly with
+FastAPI's `TestClient` against a transactional session; no Earth Engine or storage access occurs
+in the dashboard.
+
 ## 6. Cross-cutting properties
 
 - **AOI-first configurability.** Switching deployment to a new AOI is a configuration change, not a code change.

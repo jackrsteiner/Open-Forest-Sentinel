@@ -16,7 +16,7 @@ from shapely.geometry import mapping
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forest_sentinel import candidates, change, earthengine, indices
+from forest_sentinel import candidates, change, earthengine, events, indices
 from forest_sentinel.hls import discover_observations
 from forest_sentinel.models import Aoi, MethodologyVersion, Observation
 from forest_sentinel.storage import Storage
@@ -35,6 +35,8 @@ class PipelineSummary:
     index_rasters: int
     change_rasters: int
     candidates: int
+    events_created: int
+    event_observations: int
 
 
 def run_pipeline(
@@ -110,6 +112,8 @@ def run_pipeline(
                 )
             )
 
+    tracking = events.track_events_for_aoi(session, aoi=aoi)
+
     return PipelineSummary(
         observations_discovered=discovery.discovered,
         observations_recorded=discovery.recorded,
@@ -117,4 +121,6 @@ def run_pipeline(
         index_rasters=index_count,
         change_rasters=change_count,
         candidates=candidate_count,
+        events_created=tracking.events_created,
+        event_observations=tracking.observations_added,
     )

@@ -164,4 +164,8 @@ def _run_pipeline(args: argparse.Namespace) -> int:
     print(f"Index rasters: {summary.index_rasters}")
     print(f"Change rasters: {summary.change_rasters}")
     print(f"Disturbance candidates: {summary.candidates}")
+    print(
+        f"Disturbance events: {summary.events_created} created, "
+        f"{summary.event_observations} observations tracked"
+    )
     return 0
