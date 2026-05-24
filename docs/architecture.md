@@ -175,6 +175,23 @@ no `methodology_version` reference.
 `UNIQUE (aoi_id, source_scene_id)` makes HLS discovery idempotent per AOI; an index on
 `(aoi_id, acquired_at)` supports time-window queries.
 
+**`methodology_version`** (bead #35, migration `0003`). Provenance for the processing/detection
+method that produced a derived artifact.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | int PK | |
+| `name` | text | e.g. `optical-change` |
+| `version` | text | e.g. `1.0.0` |
+| `parameters` | JSONB | detection/processing parameters **plus EE script version and input collection/asset IDs** |
+| `created_at` | timestamptz | server default `now()` |
+
+`UNIQUE (name, version)` makes the identity stable.
+`forest_sentinel.methodology.get_or_create_methodology_version` returns the existing row for
+identical inputs (order-insensitive parameter comparison), inserts when absent, and raises
+`MethodologyVersionMismatch` if a `(name, version)` already stores different parameters — the
+same identity must never silently map to divergent parameters; bump the version instead.
+
 ## 6. Cross-cutting properties
 
 - **AOI-first configurability.** Switching deployment to a new AOI is a configuration change, not a code change.

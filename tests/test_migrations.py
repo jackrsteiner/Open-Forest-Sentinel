@@ -63,3 +63,29 @@ def test_downgrade_removes_observation_table(
     command.downgrade(alembic_config, "base")
 
     assert "observation" not in inspect(clean_database).get_table_names()
+
+
+def test_migrations_create_methodology_version_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "methodology_version" in inspector.get_table_names()
+
+    columns = {column["name"] for column in inspector.get_columns("methodology_version")}
+    assert {"id", "name", "version", "parameters", "created_at"} <= columns
+
+    unique_constraints = {
+        c["name"] for c in inspector.get_unique_constraints("methodology_version")
+    }
+    assert "uq_methodology_version_name_version" in unique_constraints
+
+
+def test_downgrade_removes_methodology_version_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "base")
+
+    assert "methodology_version" not in inspect(clean_database).get_table_names()
