@@ -20,6 +20,7 @@ from forest_sentinel.models import (
     Aoi,
     ChangeRaster,
     DisturbanceCandidate,
+    DisturbanceEvent,
     IndexRaster,
     Observation,
 )
@@ -129,10 +130,18 @@ def test_run_full_pipeline_produces_candidates(db_session: Session, tmp_path: Pa
     assert summary.index_rasters == 12
     assert summary.change_rasters == 10
     assert summary.candidates == 5
+    # All 5 candidates share the stubbed geometry, so they overlap into one tracked event.
+    assert summary.events_created == 1
+    assert summary.event_observations == 5
 
     assert len(db_session.execute(select(Observation)).scalars().all()) == 6
     assert len(db_session.execute(select(IndexRaster)).scalars().all()) == 12
     assert len(db_session.execute(select(ChangeRaster)).scalars().all()) == 10
+
+    # Candidates are tracked into a single disturbance event with a valid footprint.
+    event = db_session.execute(select(DisturbanceEvent)).scalar_one()
+    assert event.status == "ongoing"
+    assert to_shape(event.geometry).is_valid
 
     candidate = db_session.execute(select(DisturbanceCandidate)).scalars().first()
     assert candidate is not None

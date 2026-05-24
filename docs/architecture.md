@@ -364,6 +364,13 @@ single candidate: `id`, `event_id` (FK, ON DELETE CASCADE), `disturbance_candida
 `created_at`. `UNIQUE (disturbance_candidate_id)` means each candidate contributes to exactly one
 measurement, which makes event tracking idempotent and incremental.
 
+**`forest_sentinel.events`** implements the **spatial-overlap** tracking algorithm
+(`track_events_for_aoi`): the AOI's not-yet-tracked candidates are processed in detection order;
+a candidate that intersects an existing event's footprint (PostGIS `ST_Intersects`) extends it,
+otherwise it starts a new event. The pipeline (`run_pipeline`) calls tracking as its final stage,
+so a single `forest-sentinel run` goes discover → indices → change → candidates → **events**, and
+the per-stage summary reports events created and event-observations tracked.
+
 ## 6. Cross-cutting properties
 
 - **AOI-first configurability.** Switching deployment to a new AOI is a configuration change, not a code change.

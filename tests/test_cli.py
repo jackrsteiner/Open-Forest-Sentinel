@@ -76,6 +76,8 @@ def test_pipeline_mode_runs_and_reports_summary(
             index_rasters=12,
             change_rasters=10,
             candidates=5,
+            events_created=1,
+            event_observations=5,
         )
 
     monkeypatch.setattr(earthengine, "initialize", lambda project=None: None)
@@ -89,6 +91,7 @@ def test_pipeline_mode_runs_and_reports_summary(
     out = capsys.readouterr().out
     assert "Ran Slice 1 pipeline" in out
     assert "Disturbance candidates: 5" in out
+    assert "Disturbance events: 1 created" in out
     # The configured window was threaded through to the pipeline.
     assert str(captured["since"]) == "2026-01-01"
     assert str(captured["until"]) == "2026-02-01"
@@ -102,7 +105,7 @@ def test_pipeline_mode_reuses_existing_aoi(
     monkeypatch.setattr(
         pipeline,
         "run_pipeline",
-        lambda session, **kwargs: PipelineSummary(0, 0, 0, 0, 0, 0),
+        lambda session, **kwargs: PipelineSummary(0, 0, 0, 0, 0, 0, 0, 0),
     )
     args = ["run", "--aoi", str(SAMPLE_AOI), "--since", "2026-01-01", "--until", "2026-02-01"]
     assert main(args) == 0
