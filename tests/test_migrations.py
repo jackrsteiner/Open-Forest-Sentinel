@@ -89,3 +89,24 @@ def test_downgrade_removes_methodology_version_table(
     command.downgrade(alembic_config, "base")
 
     assert "methodology_version" not in inspect(clean_database).get_table_names()
+
+
+def test_migrations_create_quality_mask_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "quality_mask" in inspector.get_table_names()
+
+    columns = {column["name"] for column in inspector.get_columns("quality_mask")}
+    assert {"observation_id", "valid_pixel_fraction", "parameters", "created_at"} <= columns
+
+
+def test_downgrade_removes_quality_mask_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "base")
+
+    assert "quality_mask" not in inspect(clean_database).get_table_names()

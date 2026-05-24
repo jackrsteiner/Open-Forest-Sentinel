@@ -237,6 +237,29 @@ project: `FOREST_SENTINEL_GEE_PROJECT` (project id) plus ambient credentials
 `FOREST_SENTINEL_GCS_STAGING_BUCKET` (used by storage) must be writable by the same account.
 CI exercises everything through stubs, so no credentials are needed to run the tests.
 
+### 5.4 QA masking (Fmask)
+
+**`forest_sentinel.qa`** (bead #54) masks low-quality HLS pixels before index computation and
+the baseline median, and records coverage. Both HLS v2.0 collections ship an `Fmask` QA band, so
+masking is a cheap per-image EE operation. The clear-pixel rule masks **cloud** (bit 1), **cloud
+shadow** (bit 3), **snow/ice** (bit 4), and **high aerosol** (bits 6–7 == `0b11`); water and
+low/moderate aerosol are kept. The rule lives twice, kept in lock-step: the pure
+`qa.fmask_clear(value)` (exhaustively unit-tested over synthetic bit patterns) and the EE
+band-expression `earthengine.apply_fmask_mask(image)` (`bitwiseAnd`/`rightShift` + `updateMask`).
+
+**`quality_mask`** (migration `0004`) records coverage per observation:
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `observation_id` | int PK, FK → `observation.id` (ON DELETE CASCADE) | one row per observation |
+| `valid_pixel_fraction` | float | mean of the post-mask validity, from `reduceRegion` |
+| `parameters` | JSONB | which categories were masked |
+| `created_at` | timestamptz | |
+
+`qa.measure_valid_fraction` computes the fraction via the EE seam; `qa.record_quality_mask`
+upserts the row. Downstream `index_raster` / `change_raster` rows carry the same
+`valid_pixel_fraction` so coverage is retained on derived products (#39, #40).
+
 ## 6. Cross-cutting properties
 
 - **AOI-first configurability.** Switching deployment to a new AOI is a configuration change, not a code change.

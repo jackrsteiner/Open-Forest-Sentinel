@@ -91,3 +91,35 @@ def list_image_properties(
 def is_terminal_failure(state: str) -> bool:
     """True if a task state is a terminal failure (no point polling further)."""
     return state in _TASK_STATES_TERMINAL_FAILURE
+
+
+# HLS Fmask QA bit positions (HLS v2.0 ``Fmask`` band).
+FMASK_BIT_CLOUD = 1
+FMASK_BIT_CLOUD_SHADOW = 3
+FMASK_BIT_SNOW_ICE = 4
+FMASK_AEROSOL_SHIFT = 6
+FMASK_AEROSOL_HIGH = 0b11
+
+
+def apply_fmask_mask(image: Any, fmask_band: str = "Fmask") -> Any:
+    """Return ``image`` with cloud / cloud-shadow / snow-ice / high-aerosol pixels masked.
+
+    Mirrors :func:`forest_sentinel.qa.fmask_clear` as an Earth Engine band expression.
+    """
+    fmask = image.select(fmask_band)
+    cloud = fmask.bitwiseAnd(1 << FMASK_BIT_CLOUD).neq(0)
+    shadow = fmask.bitwiseAnd(1 << FMASK_BIT_CLOUD_SHADOW).neq(0)
+    snow = fmask.bitwiseAnd(1 << FMASK_BIT_SNOW_ICE).neq(0)
+    high_aerosol = fmask.rightShift(FMASK_AEROSOL_SHIFT).bitwiseAnd(0b11).eq(FMASK_AEROSOL_HIGH)
+    bad = cloud.Or(shadow).Or(snow).Or(high_aerosol)
+    return image.updateMask(bad.Not())
+
+
+def valid_pixel_fraction(image: Any, band: str, region: Any, scale: int) -> float:
+    """Fraction of unmasked pixels of ``band`` within ``region`` (mean of the mask)."""
+    mask = image.select(band).mask()
+    reduced = mask.reduceRegion(
+        reducer=ee.Reducer.mean(), geometry=ee.Geometry(region), scale=scale, maxPixels=1e10
+    )
+    value = reduced.get(band).getInfo()
+    return float(value) if value is not None else 0.0

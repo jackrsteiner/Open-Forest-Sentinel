@@ -108,3 +108,25 @@ class MethodologyVersion(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class QualityMask(Base):
+    """Per-observation QA coverage from Fmask masking.
+
+    One row per observation (``observation_id`` is the primary key); records the
+    valid-pixel fraction so downstream products and the dashboard can distinguish
+    strong evidence from obscured observations.
+    """
+
+    __tablename__ = "quality_mask"
+
+    observation_id: Mapped[int] = mapped_column(
+        ForeignKey("observation.id", ondelete="CASCADE"), primary_key=True
+    )
+    valid_pixel_fraction: Mapped[float] = mapped_column(Float, nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
