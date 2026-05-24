@@ -110,6 +110,34 @@ class MethodologyVersion(Base):
     )
 
 
+class IndexRaster(Base):
+    """A derived NBR or NDVI raster for one observation, stored as a COG."""
+
+    __tablename__ = "index_raster"
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id",
+            "index_type",
+            "methodology_version_id",
+            name="uq_index_raster_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observation_id: Mapped[int] = mapped_column(ForeignKey("observation.id"), nullable=False)
+    methodology_version_id: Mapped[int] = mapped_column(
+        ForeignKey("methodology_version.id"), nullable=False
+    )
+    index_type: Mapped[str] = mapped_column(String, nullable=False)
+    cog_path: Mapped[str] = mapped_column(String, nullable=False)
+    valid_pixel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class QualityMask(Base):
     """Per-observation QA coverage from Fmask masking.
 

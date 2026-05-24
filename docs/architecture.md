@@ -260,6 +260,33 @@ band-expression `earthengine.apply_fmask_mask(image)` (`bitwiseAnd`/`rightShift`
 upserts the row. Downstream `index_raster` / `change_raster` rows carry the same
 `valid_pixel_fraction` so coverage is retained on derived products (#39, #40).
 
+### 5.5 Index rasters (NBR, NDVI)
+
+**`forest_sentinel.indices`** (bead #39) computes per-observation NBR and NDVI server-side.
+For each observation it rebuilds the HLS image (`{collection}/{source_scene_id}`), applies the
+Fmask mask, computes each index as `normalizedDifference`, exports a COG through `Storage`, and
+upserts an `index_raster` row.
+
+    NBR  = normalizedDifference([NIR, SWIR2])
+    NDVI = normalizedDifference([NIR, RED])
+
+Per-sensor HLS v2.0 band names (the two collections differ):
+
+| Sensor | RED | NIR | SWIR2 |
+|--------|-----|-----|-------|
+| `HLSL30` | `B4` | `B5` | `B7` |
+| `HLSS30` | `B4` | `B8A` | `B12` |
+
+*(Band-name mapping is the documented decision; confirm against the live EE assets on the first
+real run.)*
+
+**`index_raster`** (migration `0005`): `id`, `observation_id` (FK), `methodology_version_id`
+(FK), `index_type` (`NBR`/`NDVI`), `cog_path` (local COG path), `valid_pixel_fraction`,
+`created_at`. `UNIQUE (observation_id, index_type, methodology_version_id)` (constraint
+`uq_index_raster_identity`) makes re-runs upsert rather than duplicate. Coverage is measured once
+per observation on the masked image and recorded both on the `quality_mask` row and on each
+`index_raster`.
+
 ## 6. Cross-cutting properties
 
 - **AOI-first configurability.** Switching deployment to a new AOI is a configuration change, not a code change.

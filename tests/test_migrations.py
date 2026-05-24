@@ -110,3 +110,31 @@ def test_downgrade_removes_quality_mask_table(
     command.downgrade(alembic_config, "base")
 
     assert "quality_mask" not in inspect(clean_database).get_table_names()
+
+
+def test_migrations_create_index_raster_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "index_raster" in inspector.get_table_names()
+
+    columns = {column["name"] for column in inspector.get_columns("index_raster")}
+    assert {
+        "id",
+        "observation_id",
+        "methodology_version_id",
+        "index_type",
+        "cog_path",
+        "valid_pixel_fraction",
+    } <= columns
+
+
+def test_downgrade_removes_index_raster_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "base")
+
+    assert "index_raster" not in inspect(clean_database).get_table_names()

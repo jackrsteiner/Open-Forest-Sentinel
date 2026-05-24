@@ -123,3 +123,13 @@ def valid_pixel_fraction(image: Any, band: str, region: Any, scale: int) -> floa
     )
     value = reduced.get(band).getInfo()
     return float(value) if value is not None else 0.0
+
+
+def image_by_id(image_id: str) -> Any:
+    """Return the Earth Engine image with the given asset id."""
+    return ee.Image(image_id)
+
+
+def normalized_difference(image: Any, bands: list[str]) -> Any:
+    """``(bands[0] - bands[1]) / (bands[0] + bands[1])`` as an EE image."""
+    return image.normalizedDifference(bands)
