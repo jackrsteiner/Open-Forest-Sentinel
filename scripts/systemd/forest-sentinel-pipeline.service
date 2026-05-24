@@ -1,0 +1,11 @@
+[Unit]
+Description=Open Forest Sentinel optical-change pipeline (one run over a rolling window)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=@APP_DIR@/.env
+ExecStart=@APP_DIR@/scripts/run_pipeline.sh

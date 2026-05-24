@@ -17,3 +17,8 @@ htmlcov/
 
 # Locally exported COGs (canonical store on the VM disk; not source)
 data/cogs/
+
+# Secrets — never commit
+.env
+gcp-service-account.json
+*-service-account.json
