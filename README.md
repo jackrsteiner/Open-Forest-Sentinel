@@ -162,7 +162,7 @@ flowchart TD
 - **Future managed database option:** Cloud SQL for PostgreSQL with PostGIS
 - **Language:** Python
 - **Imagery access & raster compute:** Google Earth Engine (`earthengine-api`) — server-side index, change, and candidate computation
-- **Local raster handling:** rasterio, GDAL, rio-cogeo (ingest / validate EE-exported COGs); numpy
+- **Local raster handling (planned):** rasterio, GDAL, rio-cogeo (COG validation on ingest is a future bead); numpy. Today EE-exported COGs are copied to disk as-is.
 - **Imagery source, first vertical slice:** NASA HLS (`HLSL30` / `HLSS30`), accessed via Google Earth Engine
 - **Planned radar augmentation:** Sentinel-1 SAR, starting with GRD backscatter / intensity change detection
 - **Possible future reference layers:** GEDI / canopy structure products, ALOS / PALSAR-derived products, night-time lights, infrastructure and legal boundary datasets
@@ -256,6 +256,8 @@ uv run forest-sentinel run \
   [--methodology-name optical-change] [--methodology-version 1.0.0] \
   [--gee-project YOUR_GCP_PROJECT]
 ```
+
+The bracketed flags are optional and shown with their default values.
 
 This discovers HLS observations through Google Earth Engine, computes Fmask-masked NBR/NDVI and ΔNBR/ΔNDVI server-side, polygonizes disturbance candidates, exports COGs to local disk via a transient GCS staging area, persists everything to PostGIS, and prints a per-stage summary. The run is **idempotent** at the AOI level (it reuses the AOI row by name) and blocks while polling each Earth Engine export to completion.
 

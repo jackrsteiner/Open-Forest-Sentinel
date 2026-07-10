@@ -23,7 +23,7 @@ Match the prototype stack described in the README. Do not swap components withou
 
 - **Language:** Python.
 - **Imagery access & raster compute:** Google Earth Engine (`earthengine-api`). HLS access, indices, change products, and candidate polygonization run server-side in EE, which exports COGs to GCS. See `docs/architecture.md` §4a.
-- **Local raster handling:** rasterio, GDAL, rio-cogeo (ingest / validate EE-exported COGs); numpy.
+- **Local raster handling (planned, not yet a dependency):** rasterio, GDAL, rio-cogeo (COG validation on ingest is a future bead); numpy. Today EE-exported COGs are copied to disk as-is — do not assume these libraries are available.
 - **Imagery source:** NASA HLS (`HLSL30` / `HLSS30`), accessed via Google Earth Engine.
 - **Raster output format:** Cloud Optimized GeoTIFF (written by EE export).
 - **Raster storage:** local VM filesystem (e.g. `/data/cogs/`) for $0 cost. EE exports to a transient GCS staging area, which the storage layer copies to local disk and then clears. Isolate storage access, the export-task lifecycle, and the copy-to-disk step behind one interface.

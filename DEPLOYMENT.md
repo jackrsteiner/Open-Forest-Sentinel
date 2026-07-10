@@ -150,8 +150,8 @@ Adding `--since/--until` switches from the Slice 0 load to the full pipeline. Tu
 |------|---------|---------|
 | `--since` / `--until` | observation window (`--since` inclusive, `--until` exclusive) | — |
 | `--baseline-window` | number of prior observations in the trailing-median baseline | `5` |
-| `--threshold` | ΔNBR drop below which a pixel is flagged (negative) | computed |
-| `--min-area` | minimum candidate polygon area, m² | computed |
+| `--threshold` | ΔNBR drop below which a pixel is flagged (negative) | `-0.25` |
+| `--min-area` | minimum candidate polygon area, m² | `4500` (≈ 0.45 ha) |
 | `--methodology-name` / `--methodology-version` | provenance labels recorded per run | `optical-change` / `1.0.0` |
 | `--gee-project` | overrides `FOREST_SENTINEL_GEE_PROJECT` | env |
 

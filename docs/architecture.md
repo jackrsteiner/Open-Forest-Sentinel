@@ -80,7 +80,7 @@ GCE VM ── load AOI ──▶ submit Earth Engine work ───────�
 | Database                      | PostgreSQL + PostGIS on the same Compute Engine VM       | Cloud SQL for PostgreSQL with PostGIS          |
 | Database access / migrations  | SQLAlchemy 2.0 ORM, GeoAlchemy2 spatial types, Alembic   | —                                              |
 | Language                      | Python                                                   | —                                              |
-| Local raster handling         | rasterio, GDAL, rio-cogeo (ingest / validate EE-exported COGs); numpy | —                                 |
+| Local raster handling         | None — EE-exported COGs are copied to disk as-is         | rasterio / GDAL / rio-cogeo COG validation on ingest (planned bead); numpy |
 | Imagery source                | NASA HLS (`HLSL30` / `HLSS30` v2.0), accessed via Google Earth Engine | —                                 |
 | Raster output format          | Cloud Optimized GeoTIFF (written by EE export)           | —                                              |
 | Raster storage                | Local VM filesystem, e.g. `/data/cogs/` (canonical). GCS used only as a transient EE-export staging area, then cleared | Google Cloud Storage (when COG volume outgrows the free VM disk) |
