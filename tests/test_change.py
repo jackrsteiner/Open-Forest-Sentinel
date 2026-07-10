@@ -142,7 +142,8 @@ def test_computes_delta_against_trailing_median(db_session: Session, tmp_path: P
         assert row.methodology_version_id == methodology.id
         assert row.baseline_window == 5
         assert row.valid_pixel_fraction == 0.9
-        assert row.cog_path.endswith(f"{row.change_type}.tif")
+        # The path carries the change type and the (sanitized) source scene id.
+        assert row.cog_path.endswith(f"{row.change_type}-scene-6.tif")
 
     # Provenance: current + 5 baselines = 6 contributing index rasters per change type.
     sources = db_session.execute(select(ChangeRasterSource)).scalars().all()

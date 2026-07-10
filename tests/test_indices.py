@@ -111,7 +111,8 @@ def test_computes_nbr_and_ndvi_for_landsat(db_session: Session, tmp_path: Path) 
         assert row.observation_id == obs.id
         assert row.methodology_version_id == methodology.id
         assert row.valid_pixel_fraction == 0.9
-        assert row.cog_path.endswith(f"{row.index_type.lower()}.tif")
+        # The path carries the index type and the (sanitized) source scene id.
+        assert row.cog_path.endswith(f"{row.index_type.lower()}-hls.scene.x.tif")
 
 
 def test_uses_sentinel_band_mapping(db_session: Session, tmp_path: Path) -> None:
@@ -143,6 +144,37 @@ def test_export_keys_carry_product_and_date(db_session: Session, tmp_path: Path)
     assert {k.product for k in keys} == {"NBR", "NDVI"}
     assert all(k.date == "2026-01-02" for k in keys)
     assert all(scale == indices.DEFAULT_SCALE_METERS for _, _, scale in storage.exports)
+
+
+def test_same_day_observations_export_to_distinct_paths(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """Two observations on the same date (e.g. HLSL30 + HLSS30) must not share a COG
+    path, or the second export silently overwrites the first (audit BUG-4)."""
+    aoi, obs_l30, methodology = _setup(db_session, "HLSL30")
+    obs_s30 = Observation(
+        aoi_id=aoi.id,
+        sensor="HLSS30",
+        acquired_at=obs_l30.acquired_at,
+        source_scene_id="HLS.scene.Y",
+    )
+    db_session.add(obs_s30)
+    db_session.flush()
+
+    storage = FakeStorage(tmp_path)
+    for obs in (obs_l30, obs_s30):
+        compute_indices_for_observation(
+            db_session,
+            aoi=aoi,
+            observation=obs,
+            methodology=methodology,
+            storage=storage,
+            ee_module=FakeEarthEngine(),
+        )
+
+    paths = [storage.path_for(key) for _, key, _ in storage.exports]
+    assert len(paths) == 4  # 2 observations x (NBR, NDVI)
+    assert len(set(paths)) == 4
 
 
 def test_records_quality_mask_coverage(db_session: Session, tmp_path: Path) -> None:

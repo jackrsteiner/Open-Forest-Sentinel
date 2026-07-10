@@ -91,7 +91,13 @@ def compute_change_products_for_observation(
         baseline_median = ee_module.median_of(baseline_images)
         delta = ee_module.subtract(current_image, baseline_median)
 
-        key = CogKey(aoi=aoi.name, product=change_type, date=date, filename=f"{change_type}.tif")
+        # As with index COGs, the scene id keeps same-day observations from colliding.
+        key = CogKey(
+            aoi=aoi.name,
+            product=change_type,
+            date=date,
+            filename=f"{change_type}-{observation.source_scene_id}.tif",
+        )
         cog_path = storage.export_image(delta, key, scale=scale, region=region)
 
         source_obs_ids = [observation.id, *(prior.id for prior in baseline_obs)]

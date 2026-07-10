@@ -212,7 +212,9 @@ can only export to Google Cloud Storage, but bulk storage must stay on the VM's 
 4. **deletes the staging object**.
 
 Deterministic layout: `{root}/{aoi}/{product}/{YYYY-MM-DD}/{file}.tif`, with each free-form
-component sanitized. Config via env: `FOREST_SENTINEL_COG_ROOT` (default `data/cogs/`),
+component sanitized. The filename embeds the source scene id
+(e.g. `nbr-{source_scene_id}.tif`) so same-day observations — both HLS sensors acquire on the
+same date, and adjacent tiles share dates — never export to the same path. Config via env: `FOREST_SENTINEL_COG_ROOT` (default `data/cogs/`),
 `FOREST_SENTINEL_GCS_STAGING_BUCKET`. `LocalDiskStorage` is the only backend today; switching the
 canonical store to GCS later is a swap behind the `Storage` protocol — pipeline code never
 touches GCS or EE directly, only `export_image`. The EE client and the GCS bucket are injected,

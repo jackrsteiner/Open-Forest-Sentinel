@@ -102,11 +102,13 @@ def compute_indices_for_observation(
     results: list[IndexRaster] = []
     for index_type, nd_bands in index_bands(observation.sensor).items():
         index_image = ee_module.normalized_difference(masked, nd_bands)
+        # The scene id keeps same-day observations (both sensors, adjacent tiles) from
+        # exporting to the same path and silently overwriting each other.
         key = CogKey(
             aoi=aoi.name,
             product=index_type,
             date=date,
-            filename=f"{index_type.lower()}.tif",
+            filename=f"{index_type.lower()}-{observation.source_scene_id}.tif",
         )
         cog_path = storage.export_image(index_image, key, scale=scale, region=region)
         results.append(
