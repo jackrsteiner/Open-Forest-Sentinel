@@ -153,8 +153,13 @@ class LocalDiskStorage:
         blob_name = f"{prefix}.tif"
         destination = self.path_for(key)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        self._staging.download_to(blob_name, destination)
-        self._staging.delete(blob_name)
+        # Staging errors (missing object, GCS hiccup) must surface as StorageError so
+        # the pipeline's per-observation isolation applies, not as raw GCS exceptions.
+        try:
+            self._staging.download_to(blob_name, destination)
+            self._staging.delete(blob_name)
+        except Exception as exc:
+            raise StorageError(f"staging copy/clear failed for {blob_name!r}: {exc}") from exc
         return destination
 
     def _await_completion(self, task: Any, prefix: str) -> None:

@@ -166,6 +166,49 @@ def test_one_failing_export_does_not_starve_the_run(db_session: Session, tmp_pat
     assert summary.events_created == 1
 
 
+def test_ee_failure_in_candidate_stage_is_isolated(db_session: Session, tmp_path: Path) -> None:
+    """A raw Earth Engine failure during candidate extraction must be skipped and
+    counted like a storage failure, not abort the run (re-audit round 2, finding 1)."""
+    from forest_sentinel.earthengine import EarthEngineError
+
+    class FailingVectorizeEE(FakeEarthEngine):
+        def threshold_and_vectorize(
+            self,
+            delta_image: Any,
+            *,
+            threshold: float,
+            scale: int,
+            region: Any,
+            min_area_m2: float,
+        ) -> list[dict[str, Any]]:
+            raise EarthEngineError("candidate vectorization failed: quota exceeded")
+
+    aoi = make_aoi(db_session, name="Hallway AOI")
+    methodology = make_methodology(db_session)
+    fake_ee = FailingVectorizeEE(
+        scenes={"NASA/HLS/HLSL30/v002": [_scene(day) for day in (1, 2)]},
+        features=[_CANDIDATE_FEATURE],
+        valid_fraction=0.95,
+    )
+
+    summary = run_pipeline(
+        db_session,
+        aoi=aoi,
+        since=date(2026, 1, 1),
+        until=date(2026, 2, 1),
+        methodology=methodology,
+        storage=FakeStorage(tmp_path),
+        ee_module=fake_ee,
+    )
+    db_session.commit()
+
+    # Scene 2's candidate stage failed (scene 1 has no baseline); indices completed.
+    assert summary.export_failures == 1
+    assert summary.index_rasters == 4
+    assert summary.candidates == 0
+    assert summary.events_created == 0
+
+
 def test_pipeline_only_processes_observations_in_the_window(
     db_session: Session, tmp_path: Path
 ) -> None:

@@ -148,6 +148,20 @@ def test_export_times_out_on_stuck_task(tmp_path: Path) -> None:
     assert staging.deleted == []
 
 
+def test_staging_failures_surface_as_storage_errors(tmp_path: Path) -> None:
+    """Raw GCS exceptions from the staged copy/clear (missing object, transient API
+    error) must become StorageError so per-observation isolation applies (R2-1)."""
+
+    class BrokenStagingBucket(FakeStagingBucket):
+        def download_to(self, blob_name: str, destination: Path) -> None:
+            raise RuntimeError("404 staging object not found")
+
+    store, _, _ = _storage(tmp_path, ["COMPLETED"], BrokenStagingBucket())
+    key = CogKey(aoi="aoi", product="nbr", date="2026-01-02", filename="nbr.tif")
+    with pytest.raises(StorageError, match="staging copy/clear failed"):
+        store.export_image("img", key)
+
+
 def test_export_raises_on_failed_task(tmp_path: Path) -> None:
     staging = FakeStagingBucket()
     store, _, _ = _storage(tmp_path, ["RUNNING", "FAILED"], staging)

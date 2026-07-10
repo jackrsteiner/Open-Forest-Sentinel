@@ -77,6 +77,17 @@ def test_list_image_properties_maps_features(fake_ee: MagicMock) -> None:
     fake_ee.ImageCollection.assert_called_once_with("C")
 
 
+def test_list_image_properties_wraps_ee_failures(fake_ee: MagicMock) -> None:
+    class FakeEEException(Exception):
+        pass
+
+    fake_ee.EEException = FakeEEException
+    chain = fake_ee.ImageCollection.return_value.filterBounds.return_value.filterDate.return_value
+    chain.getInfo.side_effect = FakeEEException("quota exceeded")
+    with pytest.raises(earthengine.EarthEngineError, match="listing"):
+        earthengine.list_image_properties("C", {}, "2026-01-01", "2026-01-31")
+
+
 def test_list_image_properties_handles_empty(fake_ee: MagicMock) -> None:
     chain = fake_ee.ImageCollection.return_value.filterBounds.return_value.filterDate.return_value
     chain.getInfo.return_value = None

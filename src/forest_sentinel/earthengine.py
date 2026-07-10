@@ -64,7 +64,10 @@ def start_image_export_to_gcs(
         fileFormat="GeoTIFF",
         formatOptions={"cloudOptimized": True},
     )
-    task.start()
+    try:
+        task.start()
+    except ee.EEException as exc:
+        raise EarthEngineError(f"failed to submit export {file_name_prefix!r}: {exc}") from exc
     return task
 
 
@@ -89,7 +92,10 @@ def list_image_properties(
     collection = (
         ee.ImageCollection(collection_id).filterBounds(ee.Geometry(region)).filterDate(since, until)
     )
-    info = collection.getInfo() or {}
+    try:
+        info = collection.getInfo() or {}
+    except ee.EEException as exc:
+        raise EarthEngineError(f"listing {collection_id!r} failed: {exc}") from exc
     features = info.get("features", [])
     return [
         {"id": feature.get("id"), "properties": feature.get("properties", {})}
@@ -130,7 +136,10 @@ def valid_pixel_fraction(image: Any, band: str, region: Any, scale: int) -> floa
     reduced = mask.reduceRegion(
         reducer=ee.Reducer.mean(), geometry=ee.Geometry(region), scale=scale, maxPixels=1e10
     )
-    value = reduced.get(band).getInfo()
+    try:
+        value = reduced.get(band).getInfo()
+    except ee.EEException as exc:
+        raise EarthEngineError(f"valid-pixel reduction for band {band!r} failed: {exc}") from exc
     return float(value) if value is not None else 0.0
 
 
@@ -184,6 +193,9 @@ def threshold_and_vectorize(
     )
     with_area = vectors.map(_feature_with_area)
     filtered = with_area.filter(ee.Filter.gte("area_m2", min_area_m2))
-    info = filtered.getInfo() or {}
+    try:
+        info = filtered.getInfo() or {}
+    except ee.EEException as exc:
+        raise EarthEngineError(f"candidate vectorization failed: {exc}") from exc
     features: list[dict[str, Any]] = info.get("features", [])
     return features

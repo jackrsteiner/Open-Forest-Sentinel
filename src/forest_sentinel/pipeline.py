@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forest_sentinel import candidates, change, earthengine, events, indices
+from forest_sentinel.earthengine import EarthEngineError
 from forest_sentinel.hls import discover_observations
 from forest_sentinel.models import Aoi, MethodologyVersion, Observation
 from forest_sentinel.storage import Storage, StorageError
@@ -100,7 +101,7 @@ def run_pipeline(
                     ee_module=ee_module,
                 )
             )
-        except StorageError as exc:
+        except (StorageError, EarthEngineError) as exc:
             export_failures += 1
             failed_observation_ids.add(observation.id)
             logger.warning(
@@ -125,29 +126,28 @@ def run_pipeline(
                 scale=scale,
                 ee_module=ee_module,
             )
-        except StorageError as exc:
+            change_count += len(products)
+            for product in products:
+                if product.change_type != CANDIDATE_CHANGE_TYPE:
+                    continue
+                candidate_count += len(
+                    candidates.extract_candidates_for_change_raster(
+                        session,
+                        change_raster=product.change_raster,
+                        delta_image=product.delta_image,
+                        region=region,
+                        scale=scale,
+                        threshold=threshold,
+                        min_area_m2=min_area_m2,
+                        ee_module=ee_module,
+                    )
+                )
+        except (StorageError, EarthEngineError) as exc:
             export_failures += 1
             logger.warning(
-                "skipping observation %s: change export failed (%s)",
+                "skipping observation %s: change/candidate stage failed (%s)",
                 observation.source_scene_id,
                 exc,
-            )
-            continue
-        change_count += len(products)
-        for product in products:
-            if product.change_type != CANDIDATE_CHANGE_TYPE:
-                continue
-            candidate_count += len(
-                candidates.extract_candidates_for_change_raster(
-                    session,
-                    change_raster=product.change_raster,
-                    delta_image=product.delta_image,
-                    region=region,
-                    scale=scale,
-                    threshold=threshold,
-                    min_area_m2=min_area_m2,
-                    ee_module=ee_module,
-                )
             )
 
     tracking = events.track_events_for_aoi(session, aoi=aoi)
