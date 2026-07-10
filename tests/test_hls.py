@@ -63,8 +63,13 @@ def test_parse_granule_cloud_cover_optional() -> None:
 
 
 def test_parse_granule_falls_back_to_feature_id() -> None:
-    feature = {"id": "full/id/path", "properties": {"system:time_start": _time_ms(2026, 1, 2)}}
-    assert parse_granule(feature, "HLSL30").source_scene_id == "full/id/path"
+    # The feature id is the full asset path; only the scene segment may be stored, or
+    # indices.build_masked_image would double the collection prefix (audit re-audit R1).
+    feature = {
+        "id": f"{HLSL30}/HLS.L30.T55LBC.X",
+        "properties": {"system:time_start": _time_ms(2026, 1, 2)},
+    }
+    assert parse_granule(feature, "HLSL30").source_scene_id == "HLS.L30.T55LBC.X"
 
 
 def test_parse_granule_requires_time_start() -> None:

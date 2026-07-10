@@ -49,7 +49,12 @@ class HlsGranule:
 def parse_granule(feature: Mapping[str, Any], sensor: str) -> HlsGranule:
     """Turn an Earth Engine image feature into an ``HlsGranule``."""
     properties: Mapping[str, Any] = feature.get("properties", {})
-    scene_id = properties.get("system:index") or feature.get("id")
+    scene_id = properties.get("system:index")
+    if not scene_id:
+        # The feature ``id`` is the full asset path (``NASA/HLS/.../<scene>``);
+        # downstream code prepends the collection id again, so keep only the scene.
+        fallback = feature.get("id")
+        scene_id = str(fallback).rsplit("/", 1)[-1] if fallback else None
     if not scene_id:
         raise ValueError(f"HLS image is missing an identifier: {feature!r}")
 
