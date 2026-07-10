@@ -8,7 +8,7 @@ fully injectable, so the hallway test runs it against stubbed EE/storage.
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 from geoalchemy2.shape import to_shape
@@ -58,10 +58,15 @@ def run_pipeline(
 
     discovery = discover_observations(session, aoi, since=since, until=until, ee_module=ee_module)
 
+    # Only the window's observations are (re)processed; without this filter every
+    # scheduled run would re-export the AOI's entire history. The trailing baseline
+    # still draws on all prior observations (change.py queries them itself).
     observations = (
         session.execute(
             select(Observation)
             .where(Observation.aoi_id == aoi.id)
+            .where(Observation.acquired_at >= datetime.combine(since, time.min, tzinfo=UTC))
+            .where(Observation.acquired_at < datetime.combine(until, time.min, tzinfo=UTC))
             .order_by(Observation.acquired_at)
         )
         .scalars()

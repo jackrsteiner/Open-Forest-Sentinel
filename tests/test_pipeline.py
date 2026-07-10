@@ -185,3 +185,45 @@ def test_rerunning_full_pipeline_is_idempotent(db_session: Session, tmp_path: Pa
     assert second.event_observations == 0
     assert len(db_session.execute(select(DisturbanceCandidate)).scalars().all()) == 5
     assert len(db_session.execute(select(DisturbanceEvent)).scalars().all()) == 1
+
+
+def test_pipeline_only_processes_observations_in_the_window(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """Observations outside --since/--until must not be reprocessed (audit BUG-5):
+    a later run over a new window leaves the history alone."""
+    aoi = _make_aoi(db_session)
+    methodology = get_or_create_methodology_version(
+        db_session, name="optical-change", version="1.0.0", parameters={}
+    )
+    fake_ee = FakeEarthEngine([_scene(day) for day in (1, 2, 3)])
+
+    first = run_pipeline(
+        db_session,
+        aoi=aoi,
+        since=date(2026, 1, 1),
+        until=date(2026, 2, 1),
+        methodology=methodology,
+        storage=FakeStorage(tmp_path),
+        ee_module=fake_ee,
+    )
+    db_session.commit()
+    assert first.index_rasters == 6
+
+    # A February window: the January observations are re-discovered (and skipped) but
+    # must not be re-exported or re-processed.
+    second = run_pipeline(
+        db_session,
+        aoi=aoi,
+        since=date(2026, 2, 1),
+        until=date(2026, 3, 1),
+        methodology=methodology,
+        storage=FakeStorage(tmp_path),
+        ee_module=fake_ee,
+    )
+    db_session.commit()
+
+    assert second.observations_recorded == 0
+    assert second.index_rasters == 0
+    assert second.change_rasters == 0
+    assert second.candidates == 0

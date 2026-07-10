@@ -343,8 +343,9 @@ get-or-creates the AOI (idempotent) and the methodology version (which pins the 
 and EE script version), then calls `run_pipeline`, which:
 
 1. discovers HLS observations for the window,
-2. computes NBR/NDVI for every observation,
-3. computes ΔNBR/ΔNDVI against each observation's trailing baseline, and
+2. computes NBR/NDVI for every observation in the window,
+3. computes ΔNBR/ΔNDVI against each windowed observation's trailing baseline (the
+   baseline itself may reach back before the window), and
 4. extracts candidate polygons from each ΔNBR product.
 
 Because compute runs in Earth Engine, every COG export is an **asynchronous batch task**; the
