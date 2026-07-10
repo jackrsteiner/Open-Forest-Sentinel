@@ -36,7 +36,7 @@ from forest_sentinel.methodology import (
     get_or_create_methodology_version,
 )
 from forest_sentinel.models import Aoi
-from forest_sentinel.storage import StorageError
+from forest_sentinel.storage import StorageConfigurationError, StorageError
 
 # Pins what Google ran for this build, recorded in the methodology version for reproducibility.
 EE_SCRIPT_VERSION = "slice1-optical-change-v1"
@@ -182,10 +182,10 @@ def _run_pipeline(args: argparse.Namespace) -> int:
                     min_area_m2=min_area,
                 )
                 session.commit()
-        except StorageError as exc:
+        except StorageConfigurationError as exc:
             print(f"error: storage is not configured ({exc})", file=sys.stderr)
             return 1
-        except (EarthEngineError, MethodologyVersionMismatch) as exc:
+        except (StorageError, EarthEngineError, MethodologyVersionMismatch) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         except OperationalError as exc:
@@ -206,4 +206,12 @@ def _run_pipeline(args: argparse.Namespace) -> int:
         f"Disturbance events: {summary.events_created} created, "
         f"{summary.event_observations} observations tracked"
     )
+    if summary.export_failures:
+        # Partial results are committed; a nonzero exit alerts the scheduler.
+        print(
+            f"error: {summary.export_failures} observation(s) skipped due to failed "
+            "Earth Engine exports (see logs); partial results were persisted",
+            file=sys.stderr,
+        )
+        return 1
     return 0

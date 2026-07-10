@@ -3,11 +3,14 @@
 Because compute runs in Earth Engine, each export is an asynchronous task; the storage
 seam blocks and polls each export to completion before the dependent step, so a single
 ``run_pipeline`` call drives the whole thread synchronously (a submit-and-return mode is a
-later bead if needed). Event tracking (Slice 2) runs as the final stage. This module is
-pure orchestration over the building blocks and is fully injectable, so the hallway test
-runs it against stubbed EE/storage.
+later bead if needed). Export failures are isolated per observation: a failing scene is
+skipped (and counted in the summary) instead of starving the rest of the run, so one
+persistently bad export cannot zero out a scheduled window. Event tracking (Slice 2)
+runs as the final stage. This module is pure orchestration over the building blocks and
+is fully injectable, so the hallway test runs it against stubbed EE/storage.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from typing import Any
@@ -20,7 +23,9 @@ from sqlalchemy.orm import Session
 from forest_sentinel import candidates, change, earthengine, events, indices
 from forest_sentinel.hls import discover_observations
 from forest_sentinel.models import Aoi, MethodologyVersion, Observation
-from forest_sentinel.storage import Storage
+from forest_sentinel.storage import Storage, StorageError
+
+logger = logging.getLogger(__name__)
 
 # Candidates are extracted from the ΔNBR product (NBR drop = disturbance).
 CANDIDATE_CHANGE_TYPE = "delta_nbr"
@@ -38,6 +43,7 @@ class PipelineSummary:
     candidates: int
     events_created: int
     event_observations: int
+    export_failures: int = 0  # observations skipped because an EE export failed
 
 
 def run_pipeline(
@@ -74,33 +80,59 @@ def run_pipeline(
         .all()
     )
 
+    # One bad export must not starve the run: failing observations are skipped and
+    # counted; already-persisted rows for them are consistent (upserts) and the next
+    # run retries.
+    export_failures = 0
+    failed_observation_ids: set[int] = set()
+
     index_count = 0
     for observation in observations:
-        index_count += len(
-            indices.compute_indices_for_observation(
+        try:
+            index_count += len(
+                indices.compute_indices_for_observation(
+                    session,
+                    aoi=aoi,
+                    observation=observation,
+                    methodology=methodology,
+                    storage=storage,
+                    scale=scale,
+                    ee_module=ee_module,
+                )
+            )
+        except StorageError as exc:
+            export_failures += 1
+            failed_observation_ids.add(observation.id)
+            logger.warning(
+                "skipping observation %s: index export failed (%s)",
+                observation.source_scene_id,
+                exc,
+            )
+
+    change_count = 0
+    candidate_count = 0
+    for observation in observations:
+        if observation.id in failed_observation_ids:
+            continue
+        try:
+            products = change.compute_change_products_for_observation(
                 session,
                 aoi=aoi,
                 observation=observation,
                 methodology=methodology,
                 storage=storage,
+                baseline_window=baseline_window,
                 scale=scale,
                 ee_module=ee_module,
             )
-        )
-
-    change_count = 0
-    candidate_count = 0
-    for observation in observations:
-        products = change.compute_change_products_for_observation(
-            session,
-            aoi=aoi,
-            observation=observation,
-            methodology=methodology,
-            storage=storage,
-            baseline_window=baseline_window,
-            scale=scale,
-            ee_module=ee_module,
-        )
+        except StorageError as exc:
+            export_failures += 1
+            logger.warning(
+                "skipping observation %s: change export failed (%s)",
+                observation.source_scene_id,
+                exc,
+            )
+            continue
         change_count += len(products)
         for product in products:
             if product.change_type != CANDIDATE_CHANGE_TYPE:
@@ -129,4 +161,5 @@ def run_pipeline(
         candidates=candidate_count,
         events_created=tracking.events_created,
         event_observations=tracking.observations_added,
+        export_failures=export_failures,
     )

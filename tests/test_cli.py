@@ -108,6 +108,29 @@ def test_pipeline_mode_runs_and_reports_summary(
     assert str(captured["until"]) == "2026-02-01"
 
 
+def test_pipeline_mode_reports_export_failures_with_nonzero_exit(
+    migrated_database: Engine,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial results are committed, but skipped exports must alert the scheduler
+    (re-audit R4)."""
+    monkeypatch.setattr(earthengine, "initialize", lambda project=None: None)
+    monkeypatch.setattr(storage, "local_disk_storage_from_env", lambda: object())
+    monkeypatch.setattr(
+        pipeline,
+        "run_pipeline",
+        lambda session, **kwargs: PipelineSummary(3, 3, 0, 4, 2, 1, 1, 1, export_failures=1),
+    )
+    exit_code = main(
+        ["run", "--aoi", str(SAMPLE_AOI), "--since", "2026-01-01", "--until", "2026-02-01"]
+    )
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Disturbance events: 1 created" in captured.out  # summary still printed
+    assert "1 observation(s) skipped" in captured.err
+
+
 def test_pipeline_mode_defaults_are_resolved_and_recorded(
     migrated_database: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -371,7 +371,9 @@ and EE script version), then calls `run_pipeline`, which:
 Because compute runs in Earth Engine, every COG export is an **asynchronous batch task**; the
 storage seam blocks and polls each export to `COMPLETED` before the dependent step, so a single
 invocation drives the whole slice synchronously (a submit-and-return mode is a later bead if
-needed). `run_pipeline` returns a `PipelineSummary` with per-stage counts, which the CLI prints.
+needed). Export failures are isolated per observation: a scene whose export fails (or times
+out) is skipped and counted in the summary, partial results are committed, and the CLI exits
+nonzero so the scheduler alerts — one persistently bad export cannot zero out a whole window. `run_pipeline` returns a `PipelineSummary` with per-stage counts, which the CLI prints.
 Without `--since`/`--until`, `run` stays in the Slice 0 load-and-persist behavior. `run_pipeline`
 is pure orchestration over injectable building blocks, so the hallway test
 (`test_run_full_pipeline_produces_candidates`) exercises the full thread against a stubbed

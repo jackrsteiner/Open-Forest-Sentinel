@@ -23,6 +23,7 @@ from forest_sentinel.models import (
     Observation,
 )
 from forest_sentinel.pipeline import run_pipeline
+from forest_sentinel.storage import CogKey, StorageError
 from tests.fakes import FakeEarthEngine, FakeStorage, make_aoi, make_methodology
 
 # A small candidate polygon inside the AOI bbox, returned by the stubbed vectorizer.
@@ -128,6 +129,41 @@ def test_rerunning_full_pipeline_is_idempotent(db_session: Session, tmp_path: Pa
     assert second.event_observations == 0
     assert len(db_session.execute(select(DisturbanceCandidate)).scalars().all()) == 5
     assert len(db_session.execute(select(DisturbanceEvent)).scalars().all()) == 1
+
+
+def test_one_failing_export_does_not_starve_the_run(db_session: Session, tmp_path: Path) -> None:
+    """A persistently failing export must be skipped and counted, not abort the whole
+    run and roll everything back (re-audit R4)."""
+
+    class FlakyStorage(FakeStorage):
+        def export_image(
+            self, image: Any, key: CogKey, *, scale: int | None = None, region: Any = None
+        ) -> Path:
+            if key.date == "2026-01-02":  # scene-2's exports always fail
+                raise StorageError("Earth Engine export ended in state FAILED")
+            return super().export_image(image, key, scale=scale, region=region)
+
+    aoi = make_aoi(db_session, name="Hallway AOI")
+    methodology = make_methodology(db_session)
+    fake_ee = _fake_ee((1, 2, 3))
+
+    summary = run_pipeline(
+        db_session,
+        aoi=aoi,
+        since=date(2026, 1, 1),
+        until=date(2026, 2, 1),
+        methodology=methodology,
+        storage=FlakyStorage(tmp_path),
+        ee_module=fake_ee,
+    )
+    db_session.commit()
+
+    # scene-2 was skipped once (index stage); the other observations completed and
+    # event tracking still ran.
+    assert summary.export_failures == 1
+    assert summary.observations_recorded == 3
+    assert summary.index_rasters == 4  # scenes 1 and 3 only
+    assert summary.events_created == 1
 
 
 def test_pipeline_only_processes_observations_in_the_window(

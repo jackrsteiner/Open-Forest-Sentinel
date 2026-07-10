@@ -35,6 +35,14 @@ class StorageError(RuntimeError):
     """Raised when a COG cannot be exported, staged, or copied to local disk."""
 
 
+class StorageConfigurationError(StorageError):
+    """Raised when storage cannot be *built* (missing configuration).
+
+    Distinct from run-time export failures so callers can tell "fix your
+    environment" apart from "this export failed".
+    """
+
+
 def _sanitize(component: str) -> str:
     """Reduce a free-form name to a safe, deterministic path component."""
     cleaned = _SAFE_COMPONENT.sub("-", component.strip().lower()).strip("-")
@@ -170,7 +178,7 @@ def local_disk_storage_from_env(staging: StagingBucket | None = None) -> LocalDi
     root = Path(os.environ.get(COG_ROOT_ENV_VAR, DEFAULT_COG_ROOT))
     bucket_name = os.environ.get(GCS_STAGING_BUCKET_ENV_VAR)
     if not bucket_name:
-        raise StorageError(f"{GCS_STAGING_BUCKET_ENV_VAR} is not set")
+        raise StorageConfigurationError(f"{GCS_STAGING_BUCKET_ENV_VAR} is not set")
     if staging is None:
         staging = GcsStagingBucket(bucket_name)
     return LocalDiskStorage(root, bucket_name, staging)
