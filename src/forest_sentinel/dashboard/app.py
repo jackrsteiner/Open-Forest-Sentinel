@@ -18,9 +18,10 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from geoalchemy2 import Geography
 from geoalchemy2.shape import to_shape
 from shapely.geometry import mapping
-from sqlalchemy import Engine, func, select
+from sqlalchemy import Engine, cast, func, select
 from sqlalchemy.orm import Session
 
 from forest_sentinel.db import get_engine
@@ -74,21 +75,49 @@ def create_app() -> FastAPI:
 
     @app.get("/api/aois/{aoi_id}/events")
     def aoi_events(aoi_id: int, session: SessionDep) -> dict[str, Any]:
-        """Events for an AOI as a GeoJSON FeatureCollection."""
+        """Events for an AOI as a GeoJSON FeatureCollection.
+
+        One aggregate query: per-event observation count, latest detection area, and
+        footprint area come back with the events instead of a timeline fetch per event.
+        """
         if session.get(Aoi, aoi_id) is None:
             raise HTTPException(status_code=404, detail=f"AOI {aoi_id} not found")
-        events = (
-            session.execute(
-                select(DisturbanceEvent)
-                .where(DisturbanceEvent.aoi_id == aoi_id)
-                .order_by(DisturbanceEvent.first_detected_at)
+
+        measurements = (
+            select(
+                EventObservation.event_id,
+                EventObservation.area_m2,
+                func.count().over(partition_by=EventObservation.event_id).label("count"),
+                func.row_number()
+                .over(
+                    partition_by=EventObservation.event_id,
+                    order_by=(EventObservation.observed_at.desc(), EventObservation.id.desc()),
+                )
+                .label("recency"),
             )
-            .scalars()
-            .all()
+        ).subquery()
+        latest = (
+            select(measurements.c.event_id, measurements.c.area_m2, measurements.c.count)
+            .where(measurements.c.recency == 1)
+            .subquery()
         )
+        rows = session.execute(
+            select(
+                DisturbanceEvent,
+                func.ST_Area(cast(DisturbanceEvent.geometry, Geography)),
+                func.coalesce(latest.c.count, 0),
+                latest.c.area_m2,
+            )
+            .outerjoin(latest, latest.c.event_id == DisturbanceEvent.id)
+            .where(DisturbanceEvent.aoi_id == aoi_id)
+            .order_by(DisturbanceEvent.first_detected_at)
+        ).all()
         return {
             "type": "FeatureCollection",
-            "features": [_event_feature(session, event) for event in events],
+            "features": [
+                _event_feature(event, footprint_area, count, latest_area)
+                for event, footprint_area, count, latest_area in rows
+            ],
         }
 
     @app.get("/api/events/{event_id}")
@@ -113,9 +142,12 @@ def create_app() -> FastAPI:
     return app
 
 
-def _event_feature(session: Session, event: DisturbanceEvent) -> dict[str, Any]:
-    measurements = _timeline(session, event.id)
-    latest_area = measurements[-1]["area_m2"] if measurements else None
+def _event_feature(
+    event: DisturbanceEvent,
+    footprint_area: float,
+    observation_count: int,
+    latest_area: float | None,
+) -> dict[str, Any]:
     return {
         "type": "Feature",
         "geometry": mapping(to_shape(event.geometry)),
@@ -124,9 +156,9 @@ def _event_feature(session: Session, event: DisturbanceEvent) -> dict[str, Any]:
             "status": event.status,
             "first_detected_at": event.first_detected_at,
             "last_detected_at": event.last_detected_at,
-            "observation_count": len(measurements),
+            "observation_count": observation_count,
             # Cumulative unioned footprint vs the latest single-scene detection.
-            "footprint_area_m2": footprint_area_m2(session, event.geometry),
+            "footprint_area_m2": footprint_area,
             "latest_area_m2": latest_area,
         },
     }
