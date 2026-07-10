@@ -35,7 +35,7 @@ Match the prototype stack described in the README. Do not swap components withou
 
 ## Domain objects
 
-The system tracks: `aoi`, `observation`, `index_raster`, `change_raster`, `disturbance_candidate`, `disturbance_event`, `event_observation`, `manual_review`, `methodology_version`. Use these names in code, schemas, and docs. If you need a new domain object, propose it in a bead — do not invent one inline.
+The system tracks (implemented): `aoi`, `observation`, `quality_mask`, `index_raster`, `change_raster`, `change_raster_source`, `disturbance_candidate`, `disturbance_event`, `event_observation`, `methodology_version`. Planned (see `docs/architecture.md` §5): `manual_review`, `sensor_source`, `radar_change_raster`, `context_layer`, `event_context`, `confidence_assessment`. Use these names in code, schemas, and docs. If you need a new domain object, propose it in a bead — do not invent one inline.
 
 ## How work is organized
 

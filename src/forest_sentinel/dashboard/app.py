@@ -1,9 +1,11 @@
 """FastAPI dashboard backend.
 
 Read-only JSON/GeoJSON endpoints over the PostGIS catalog that let a user answer the six
-README "Product Deliverable" questions for a disturbance event: where (geometry), when first
-detected, size, expansion rate (growth over the timeline), status, and supporting evidence
-(the source change rasters). The map UI (a static Leaflet page) consumes these endpoints.
+core README "Product Deliverable" questions for a disturbance event: where (geometry), when
+first detected, size (footprint area), expansion rate (footprint growth over the timeline),
+status, and supporting evidence (the source change rasters); the README's remaining
+deliverable questions arrive with later slices (see ``docs/architecture.md`` §2). The map UI
+(a static Leaflet page) consumes these endpoints.
 
 The database session is provided by the ``get_session`` dependency so tests can override it
 with a transactional test session; no Earth Engine or storage access happens here.

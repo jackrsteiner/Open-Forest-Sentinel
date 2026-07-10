@@ -12,7 +12,9 @@ A defining property is **observation currency**: by using openly available HLS i
 
 ## 2. User-facing deliverable
 
-The product is **not** a set of derived raster files. It is a lightweight dashboard that surfaces:
+The product is **not** a set of derived raster files. It is a lightweight dashboard that surfaces
+the README's ten "Product Deliverable" questions. The **six core questions** ship with the
+Slice 2 dashboard (§5.10):
 
 - where likely logging or forest disturbance is happening
 - when disturbance was first detected
@@ -20,6 +22,11 @@ The product is **not** a set of derived raster files. It is a lightweight dashbo
 - how quickly the disturbance is expanding
 - which detections are new, ongoing, resolved, or uncertain
 - what satellite-derived evidence supports each detection
+
+The remaining four — which sensor or method produced a detection, whether it is optical-only /
+radar-only / fused, how quality conditions affect confidence, and how it relates to contextual
+layers — arrive with the confidence model, radar augmentation, and context-layer epics
+(E14–E17).
 
 Derived rasters are internal analytical artifacts that power detection, tracking, visualization, and review.
 
@@ -129,19 +136,28 @@ The prototype targets **$0/month** for a reasonably small AOI by staying inside 
 
 ## 5. Core domain objects
 
-These are the entities the system tracks. Concrete schemas, columns, and relationships are **TBD** and will be resolved in implementation beads.
+These are the entities the system tracks. Concrete schemas are introduced incrementally, one
+bead per table; the tables realized so far are specified in §5.1–§5.10. Objects listed as
+*planned* are not yet implemented.
 
-| Object                  | Description                                                                              |
-|-------------------------|------------------------------------------------------------------------------------------|
-| `aoi`                   | Configured area of interest geometry and metadata.                                       |
-| `observation`           | One imagery acquisition / date used for analysis. Holds sensor, timestamp, cloud / quality metadata, and source scene identifiers. |
-| `index_raster`          | Derived NBR / NDVI raster metadata.                                                      |
-| `change_raster`         | ΔNBR / ΔNDVI or anomaly raster metadata.                                                 |
-| `disturbance_candidate` | Raw detected disturbance polygon.                                                        |
-| `disturbance_event`     | Tracked logging / disturbance event over time.                                           |
-| `event_observation`     | Per-date measurement of event area, severity, and growth.                                |
-| `manual_review`         | Human validation, notes, uncertainty, false-positive status.                             |
-| `methodology_version`   | Processing and detection method provenance.                                              |
+| Object                  | Status      | Description                                                                              |
+|-------------------------|-------------|------------------------------------------------------------------------------------------|
+| `aoi`                   | implemented | Configured area of interest geometry and metadata.                                       |
+| `observation`           | implemented | One imagery acquisition / date used for analysis. Holds sensor, timestamp, cloud / quality metadata, and source scene identifiers. |
+| `quality_mask`          | implemented | Per-observation QA coverage from Fmask masking (§5.4).                                   |
+| `index_raster`          | implemented | Derived NBR / NDVI raster metadata.                                                      |
+| `change_raster`         | implemented | ΔNBR / ΔNDVI or anomaly raster metadata.                                                 |
+| `change_raster_source`  | implemented | Link table: every `index_raster` that contributed to a `change_raster` (§5.6).           |
+| `disturbance_candidate` | implemented | Raw detected disturbance polygon.                                                        |
+| `disturbance_event`     | implemented | Tracked logging / disturbance event over time.                                           |
+| `event_observation`     | implemented | Per-date measurement of event area, severity, and growth.                                |
+| `methodology_version`   | implemented | Processing and detection method provenance.                                              |
+| `manual_review`         | planned     | Human validation, notes, uncertainty, false-positive status (Slice 3, E8).               |
+| `sensor_source`         | planned     | Source dataset metadata beyond HLS (E16).                                                |
+| `radar_change_raster`   | planned     | Sentinel-1-derived SAR change metadata (E16).                                            |
+| `context_layer`         | planned     | Legal / administrative / infrastructure overlay dataset (E17).                           |
+| `event_context`         | planned     | Relationship between an event and contextual features (E17).                             |
+| `confidence_assessment` | planned     | Structured explanation of an event's confidence level (E15).                             |
 
 Relationships implied by the pipeline:
 
@@ -398,8 +414,10 @@ serving a read-only, unauthenticated view over PostGIS — the resolved Slice 2 
   **timeline** (per-scene detection area + footprint growth), and **supporting evidence** (the
   source ΔNBR change rasters).
 
-Together these answer the six README "Product Deliverable" questions — where (geometry), when first
-detected, size, expansion rate (timeline growth), status, and supporting evidence. The database
+Together these answer the six core README "Product Deliverable" questions (§2) — where
+(geometry), when first detected, size (footprint area), expansion rate (timeline footprint
+growth), status, and supporting evidence; the README's remaining deliverable questions arrive
+with E14–E17. The database
 session is an injectable dependency (`get_session`), so endpoints are tested headlessly with
 FastAPI's `TestClient` against a transactional session; no Earth Engine or storage access occurs
 in the dashboard.
@@ -411,6 +429,15 @@ in the dashboard.
 - **Temporal currency.** Scheduling and sensor revisit cadence are designed so detections refresh more often than weekly for small-to-medium AOIs.
 - **Provenance.** Every derived artifact is traceable to its source observations and to the `methodology_version` that produced it.
 
-## 7. Out of scope (for this document)
+## 7. Open design points
 
-Anything not asserted by the README is out of scope here. In particular: detection algorithm thresholds, polygon-tracking algorithm, dashboard framework choice, authentication model, and concrete database schemas. These are **TBD** and will be settled in implementation beads under the relevant epics.
+Earlier revisions listed detection thresholds, the tracking algorithm, the dashboard framework,
+and the concrete schemas as TBD; those are now resolved and recorded in §5.1–§5.10. The points
+that remain genuinely open, to be settled in implementation beads under the relevant epics:
+
+- Retention policy for COGs and observations (the VM disk is finite; see §4b).
+- The confidence scoring rule and `confidence_assessment` schema (E15, Slice 4).
+- The manual-review workflow, its schema, and the authentication / access model for review
+  (and any future non-read-only dashboard surface) (E8, Slice 3).
+- Radar processing parameters and the `radar_change_raster` / `sensor_source` schemas (E16).
+- Context-layer ingestion and the `context_layer` / `event_context` schemas (E17).
