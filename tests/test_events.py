@@ -1,13 +1,15 @@
 from datetime import UTC, datetime
 
+import pytest
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import MultiPolygon, Polygon
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forest_sentinel.events import (
     EVENT_STATUS_NEW,
     EVENT_STATUS_ONGOING,
+    footprint_area_m2,
     track_events_for_aoi,
 )
 from forest_sentinel.methodology import get_or_create_methodology_version
@@ -82,6 +84,12 @@ _PATCH_A_GROWN = [(0.15, 0.1), (0.3, 0.1), (0.3, 0.2), (0.15, 0.2), (0.15, 0.1)]
 _PATCH_B = [(0.6, 0.6), (0.7, 0.6), (0.7, 0.7), (0.6, 0.7), (0.6, 0.6)]
 
 
+def _geodesic_area(session: Session, ring: list[tuple[float, float]]) -> float:
+    """Reference geodesic area of a ring, via the same PostGIS geography math."""
+    wkt = "POLYGON((" + ", ".join(f"{x} {y}" for x, y in ring) + "))"
+    return float(session.execute(select(func.ST_Area(func.ST_GeogFromText(wkt)))).scalar_one())
+
+
 def test_overlapping_candidates_form_one_event(db_session: Session) -> None:
     aoi, methodology = _aoi_and_methodology(db_session)
     _candidate(db_session, aoi, methodology, day=1, ring=_PATCH_A, area_m2=10_000.0)
@@ -103,7 +111,14 @@ def test_overlapping_candidates_form_one_event(db_session: Session) -> None:
     )
     assert [o.area_m2 for o in observations] == [10_000.0, 15_000.0]
     assert observations[0].growth_m2 is None
-    assert observations[1].growth_m2 == 5_000.0  # 15000 - 10000
+    # Footprint expansion: the union's geodesic area minus the first patch's.
+    expected_growth = footprint_area_m2(db_session, event.geometry) - _geodesic_area(
+        db_session, _PATCH_A
+    )
+    growth = observations[1].growth_m2
+    assert growth is not None
+    assert growth == pytest.approx(expected_growth, rel=1e-6)
+    assert growth > 0
 
 
 def test_disjoint_candidates_form_separate_events(db_session: Session) -> None:
@@ -146,6 +161,28 @@ def test_tracking_is_idempotent(db_session: Session) -> None:
     assert (second.events_created, second.events_extended, second.observations_added) == (0, 0, 0)
     assert len(db_session.execute(select(DisturbanceEvent)).scalars().all()) == 1
     assert len(db_session.execute(select(EventObservation)).scalars().all()) == 2
+
+
+def test_contained_candidate_yields_zero_growth(db_session: Session) -> None:
+    """A later, smaller detection inside the existing footprint adds no area: growth
+    must be ~0, not negative (audit BUG-9)."""
+    aoi, methodology = _aoi_and_methodology(db_session)
+    inner = [(0.12, 0.12), (0.15, 0.12), (0.15, 0.15), (0.12, 0.15), (0.12, 0.12)]
+    _candidate(db_session, aoi, methodology, day=1, ring=_PATCH_A, area_m2=10_000.0)
+    _candidate(db_session, aoi, methodology, day=8, ring=inner, area_m2=1_000.0)
+
+    track_events_for_aoi(db_session, aoi=aoi)
+    db_session.commit()
+
+    observations = (
+        db_session.execute(select(EventObservation).order_by(EventObservation.observed_at))
+        .scalars()
+        .all()
+    )
+    growth = observations[1].growth_m2
+    assert growth is not None
+    assert growth == pytest.approx(0.0, abs=1.0)  # within 1 m² of zero
+    assert growth >= 0.0
 
 
 def test_candidate_bridging_two_events_attaches_to_the_earliest(db_session: Session) -> None:

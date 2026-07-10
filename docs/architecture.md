@@ -368,9 +368,12 @@ per E9), `geometry` (PostGIS `MULTIPOLYGON` SRID 4326 — the unioned footprint)
 
 **`event_observation`** (migration `0008`) is one per-date measurement of an event, produced by a
 single candidate: `id`, `event_id` (FK, ON DELETE CASCADE), `disturbance_candidate_id` (FK),
-`observed_at`, `area_m2`, `growth_m2` (area added vs the prior measurement; null for the first),
-`created_at`. `UNIQUE (disturbance_candidate_id)` means each candidate contributes to exactly one
-measurement, which makes event tracking idempotent and incremental.
+`observed_at`, `area_m2` (the candidate's single-scene detection area), `growth_m2` (**footprint
+expansion**: the geodesic area, PostGIS `ST_Area` over `geography`, that the candidate added to
+the event's unioned footprint; null for the first measurement — never negative, unlike a naive
+difference of detection areas, which can shrink under partial cloud while the disturbance keeps
+growing), `created_at`. `UNIQUE (disturbance_candidate_id)` means each candidate contributes to
+exactly one measurement, which makes event tracking idempotent and incremental.
 
 **`forest_sentinel.events`** implements the **spatial-overlap** tracking algorithm
 (`track_events_for_aoi`): the AOI's not-yet-tracked candidates are processed in detection order;
@@ -388,9 +391,10 @@ serving a read-only, unauthenticated view over PostGIS — the resolved Slice 2 
 - `GET /` — a static Leaflet map page (`static/index.html`) that consumes the API.
 - `GET /api/aois` — AOIs with event counts.
 - `GET /api/aois/{id}/events` — the AOI's events as a GeoJSON `FeatureCollection` (status, first/
-  last detected, latest area, observation count).
-- `GET /api/events/{id}` — event detail: footprint geometry, the measurement **timeline** (area +
-  growth), and **supporting evidence** (the source ΔNBR change rasters).
+  last detected, cumulative footprint area, latest detection area, observation count).
+- `GET /api/events/{id}` — event detail: footprint geometry and area, the measurement
+  **timeline** (per-scene detection area + footprint growth), and **supporting evidence** (the
+  source ΔNBR change rasters).
 
 Together these answer the six README "Product Deliverable" questions — where (geometry), when first
 detected, size, expansion rate (timeline growth), status, and supporting evidence. The database

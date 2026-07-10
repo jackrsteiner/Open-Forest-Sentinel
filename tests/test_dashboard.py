@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forest_sentinel.dashboard.app import app, get_session
-from forest_sentinel.events import track_events_for_aoi
+from forest_sentinel.events import footprint_area_m2, track_events_for_aoi
 from forest_sentinel.methodology import get_or_create_methodology_version
 from forest_sentinel.models import (
     Aoi,
@@ -113,6 +113,11 @@ def test_aoi_events_returns_geojson_feature_collection(
     assert props["status"] == "ongoing"
     assert props["observation_count"] == 2
     assert props["latest_area_m2"] == 15_000.0
+    # The cumulative unioned footprint (geodesic m²) is exposed alongside it.
+    event = db_session.execute(select(DisturbanceEvent)).scalar_one()
+    assert props["footprint_area_m2"] == pytest.approx(
+        footprint_area_m2(db_session, event.geometry)
+    )
 
 
 def test_event_detail_has_timeline_and_evidence(client: TestClient, db_session: Session) -> None:
@@ -128,7 +133,9 @@ def test_event_detail_has_timeline_and_evidence(client: TestClient, db_session: 
     timeline = detail["timeline"]
     assert [m["area_m2"] for m in timeline] == [10_000.0, 15_000.0]
     assert timeline[0]["growth_m2"] is None
-    assert timeline[1]["growth_m2"] == 5_000.0
+    # growth_m2 is footprint expansion (geodesic m²), not a detection-area delta.
+    assert timeline[1]["growth_m2"] > 0
+    assert detail["footprint_area_m2"] > 0
 
     # Supporting evidence: the two source ΔNBR change rasters.
     assert len(detail["evidence"]) == 2

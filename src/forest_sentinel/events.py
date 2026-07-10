@@ -6,6 +6,11 @@ whose geometry intersects an existing event's footprint extends that event (a ne
 new event. Tracking is **incremental and idempotent**: only candidates not yet linked to an
 ``event_observation`` are processed, so re-running adds nothing.
 
+``growth_m2`` measures **footprint expansion**: the geodesic area (PostGIS
+``ST_Area`` over ``geography``) the candidate added to the event's unioned footprint —
+not the difference between successive detection areas, which can shrink (e.g. under
+partial cloud) while the disturbance itself keeps growing.
+
 The candidate→event linkage is the resolved design from the Slice 2 planning pass. A candidate
 that intersects several events is attached to the earliest; merging multiple events into one is
 a deliberate non-goal of this slice.
@@ -13,6 +18,7 @@ a deliberate non-goal of this slice.
 
 from dataclasses import dataclass
 
+from geoalchemy2.elements import WKBElement
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import MultiPolygon
 from shapely.geometry.base import BaseGeometry
@@ -31,6 +37,15 @@ from forest_sentinel.models import (
 
 EVENT_STATUS_NEW = "new"
 EVENT_STATUS_ONGOING = "ongoing"
+
+
+def footprint_area_m2(session: Session, geometry: WKBElement) -> float:
+    """Geodesic area of a WGS 84 footprint in m² (PostGIS ``ST_Area`` on geography).
+
+    Goes through WKT so both DB-loaded and freshly built ``WKBElement``s bind cleanly.
+    """
+    wkt = to_shape(geometry).wkt
+    return float(session.execute(select(func.ST_Area(func.ST_GeogFromText(wkt)))).scalar_one())
 
 
 @dataclass(frozen=True)
@@ -129,19 +144,16 @@ def _extend_event(
     candidate: DisturbanceCandidate,
     candidate_shape: BaseGeometry,
 ) -> float | None:
-    previous = (
-        session.execute(
-            select(EventObservation)
-            .where(EventObservation.event_id == event.id)
-            .order_by(EventObservation.observed_at.desc(), EventObservation.id.desc())
-        )
-        .scalars()
-        .first()
-    )
-    growth = candidate.area_m2 - previous.area_m2 if previous is not None else None
-
     merged = to_shape(event.geometry).union(candidate_shape)
-    event.geometry = from_shape(_as_multipolygon(merged), srid=AOI_SRID)
+    merged_geometry = from_shape(_as_multipolygon(merged), srid=AOI_SRID)
+    # Footprint expansion: area the candidate added to the unioned footprint. The
+    # union never shrinks; max() only absorbs floating-point noise.
+    growth = max(
+        0.0,
+        footprint_area_m2(session, merged_geometry) - footprint_area_m2(session, event.geometry),
+    )
+
+    event.geometry = merged_geometry
     event.first_detected_at = min(event.first_detected_at, candidate.detected_at)
     event.last_detected_at = max(event.last_detected_at, candidate.detected_at)
     event.status = EVENT_STATUS_ONGOING

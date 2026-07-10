@@ -22,6 +22,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
 from forest_sentinel.db import get_engine
+from forest_sentinel.events import footprint_area_m2
 from forest_sentinel.models import (
     Aoi,
     ChangeRaster,
@@ -102,6 +103,7 @@ def create_app() -> FastAPI:
             "first_detected_at": event.first_detected_at,
             "last_detected_at": event.last_detected_at,
             "geometry": mapping(to_shape(event.geometry)),
+            "footprint_area_m2": footprint_area_m2(session, event.geometry),
             "timeline": timeline,
             "evidence": _evidence(session, event_id),
         }
@@ -121,6 +123,8 @@ def _event_feature(session: Session, event: DisturbanceEvent) -> dict[str, Any]:
             "first_detected_at": event.first_detected_at,
             "last_detected_at": event.last_detected_at,
             "observation_count": len(measurements),
+            # Cumulative unioned footprint vs the latest single-scene detection.
+            "footprint_area_m2": footprint_area_m2(session, event.geometry),
             "latest_area_m2": latest_area,
         },
     }
