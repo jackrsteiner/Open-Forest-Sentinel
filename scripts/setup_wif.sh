@@ -51,20 +51,39 @@ gcloud services enable \
 PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
 
 echo "==> Ensuring workload identity pool '${POOL_ID}'"
-if ! gcloud iam workload-identity-pools describe "${POOL_ID}" \
-        --project "${PROJECT_ID}" --location global >/dev/null 2>&1; then
+# Deleted pools/providers linger in a DELETED state for 30 days, and `describe`
+# still finds them — so check the state, not mere existence, and undelete
+# instead of treating the soft-deleted husk as usable (teardown + re-setup
+# would otherwise dead-end on a NOT_FOUND at provider creation).
+pool_state="$(gcloud iam workload-identity-pools describe "${POOL_ID}" \
+    --project "${PROJECT_ID}" --location global --format 'value(state)' 2>/dev/null || true)"
+if [ "${pool_state}" = "DELETED" ]; then
+    echo "    (soft-deleted — undeleting)"
+    gcloud iam workload-identity-pools undelete "${POOL_ID}" \
+        --project "${PROJECT_ID}" --location global >/dev/null
+elif [ -n "${pool_state}" ]; then
+    echo "    (already exists)"
+else
     gcloud iam workload-identity-pools create "${POOL_ID}" \
         --project "${PROJECT_ID}" \
         --location global \
         --display-name "GitHub Actions"
-else
-    echo "    (already exists)"
 fi
 
+EXPECTED_CONDITION="assertion.repository == '${GITHUB_REPO}'"
+
 echo "==> Ensuring OIDC provider '${PROVIDER_ID}' (locked to ${GITHUB_REPO})"
-if ! gcloud iam workload-identity-pools providers describe "${PROVIDER_ID}" \
+provider_state="$(gcloud iam workload-identity-pools providers describe "${PROVIDER_ID}" \
+    --project "${PROJECT_ID}" --location global \
+    --workload-identity-pool "${POOL_ID}" --format 'value(state)' 2>/dev/null || true)"
+if [ "${provider_state}" = "DELETED" ]; then
+    echo "    (soft-deleted — undeleting)"
+    gcloud iam workload-identity-pools providers undelete "${PROVIDER_ID}" \
         --project "${PROJECT_ID}" --location global \
-        --workload-identity-pool "${POOL_ID}" >/dev/null 2>&1; then
+        --workload-identity-pool "${POOL_ID}" >/dev/null
+elif [ -n "${provider_state}" ]; then
+    echo "    (already exists)"
+else
     gcloud iam workload-identity-pools providers create-oidc "${PROVIDER_ID}" \
         --project "${PROJECT_ID}" \
         --location global \
@@ -72,9 +91,23 @@ if ! gcloud iam workload-identity-pools providers describe "${PROVIDER_ID}" \
         --display-name "GitHub OIDC" \
         --issuer-uri "https://token.actions.githubusercontent.com" \
         --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository" \
-        --attribute-condition "assertion.repository == '${GITHUB_REPO}'"
-else
-    echo "    (already exists — if you need to point it at a different repo, delete it first)"
+        --attribute-condition "${EXPECTED_CONDITION}"
+fi
+
+# Self-heal a wrong-repo provider: the repository lock is a mutable attribute
+# condition, so an existing (or just-undeleted) provider pointing at a different
+# repo is repointed to GITHUB_REPO instead of demanding a delete/re-create.
+current_condition="$(gcloud iam workload-identity-pools providers describe "${PROVIDER_ID}" \
+    --project "${PROJECT_ID}" --location global \
+    --workload-identity-pool "${POOL_ID}" --format 'value(attributeCondition)' 2>/dev/null || true)"
+if [ -n "${current_condition}" ] && [ "${current_condition}" != "${EXPECTED_CONDITION}" ]; then
+    echo "==> Provider was locked to a different repository — repointing to ${GITHUB_REPO}"
+    echo "    (was: ${current_condition})"
+    gcloud iam workload-identity-pools providers update-oidc "${PROVIDER_ID}" \
+        --project "${PROJECT_ID}" \
+        --location global \
+        --workload-identity-pool "${POOL_ID}" \
+        --attribute-condition "${EXPECTED_CONDITION}"
 fi
 
 echo "==> Ensuring provisioner service account ${PROVISIONER_SA}"
@@ -100,12 +133,36 @@ for role in \
         --condition=None >/dev/null
 done
 
+MEMBER_PREFIX="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository/"
+EXPECTED_MEMBER="${MEMBER_PREFIX}${GITHUB_REPO}"
+
 echo "==> Allowing ${GITHUB_REPO} workflows to impersonate the provisioner"
 gcloud iam service-accounts add-iam-policy-binding "${PROVISIONER_SA}" \
     --project "${PROJECT_ID}" \
     --role roles/iam.workloadIdentityUser \
-    --member "principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository/${GITHUB_REPO}" \
+    --member "${EXPECTED_MEMBER}" \
     >/dev/null
+
+# After a repoint, drop grants left behind for other repositories under this
+# pool, so the previous repository keeps no path to the provisioner. Scoped to
+# this pool's attribute.repository members only.
+stale_members="$(gcloud iam service-accounts get-iam-policy "${PROVISIONER_SA}" \
+    --project "${PROJECT_ID}" \
+    --flatten 'bindings[].members' \
+    --filter 'bindings.role:roles/iam.workloadIdentityUser' \
+    --format 'value(bindings.members)' 2>/dev/null \
+    | grep -F "${MEMBER_PREFIX}" | grep -Fxv "${EXPECTED_MEMBER}" || true)"
+while IFS= read -r member; do
+    [ -n "${member}" ] || continue
+    echo "    removing stale grant for ${member#"${MEMBER_PREFIX}"}"
+    gcloud iam service-accounts remove-iam-policy-binding "${PROVISIONER_SA}" \
+        --project "${PROJECT_ID}" \
+        --role roles/iam.workloadIdentityUser \
+        --member "${member}" \
+        >/dev/null
+done <<EOF
+${stale_members}
+EOF
 
 WIF_PROVIDER="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}"
 
