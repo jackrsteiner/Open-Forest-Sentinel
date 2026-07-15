@@ -195,13 +195,20 @@ case "${origin_lc}" in
                     -- "${INSTANCE_ENV_FILE}"
                 CONFIG_STATUS="committed"
                 branch="$(git -C "${repo_root}" rev-parse --abbrev-ref HEAD)"
-                if git -C "${repo_root}" push origin "${branch}" >/dev/null 2>&1; then
+                echo "==> Pushing to ${GITHUB_REPO} — git may prompt for GitHub credentials"
+                echo "    (username + a fine-grained PAT as the password). To skip the push,"
+                echo "    press Enter at the prompts (or Ctrl-C); the commit is kept either way."
+                # No-op INT handler (not ''): Ctrl-C stops only the child git
+                # push, and the script carries on into the skipped-push branch.
+                trap ':' INT
+                if git -C "${repo_root}" push origin "${branch}"; then
                     echo "    (committed and pushed to ${GITHUB_REPO})"
                     CONFIG_STATUS="pushed"
                 else
-                    echo "    (committed locally; push failed — no GitHub credentials in" >&2
-                    echo "     this shell? Authenticate and run: git push)" >&2
+                    echo "    (committed locally; push skipped. To push it later, authenticate —"
+                    echo "     e.g. gh auth login && gh auth setup-git — then run: git push)"
                 fi
+                trap - INT
             fi
             if [ -f "${repo_root}/examples/aoi-sample.geojson" ] \
                     && cmp -s "${repo_root}/config/aoi.geojson" "${repo_root}/examples/aoi-sample.geojson"; then
