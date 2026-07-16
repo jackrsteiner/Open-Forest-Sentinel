@@ -64,6 +64,13 @@ shows it** — casing matters for step 2.
 2. Register the project for Earth Engine at
    <https://code.earthengine.google.com/register> (choose **noncommercial /
    unpaid**). This cannot be automated.
+   Then set the project's Earth Engine **noncommercial tier to Contributor**
+   (Cloud console → Earth Engine settings; self-service). It is still free —
+   it only requires the billing account you just attached — and raises the
+   monthly compute quota from 150 to 1,000 EECU-hours plus the concurrent
+   batch-task limit, which the pipeline's batched exports exploit
+   (`docs/scaling.md` §2). The default Community tier works but makes the
+   first backfill painfully slow (~40 min/export observed).
 3. In [Cloud Shell](https://shell.cloud.google.com/) (or any authenticated
    `gcloud`):
 
