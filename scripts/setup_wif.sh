@@ -242,30 +242,26 @@ case "${CONFIG_STATUS}" in
     pushed)
         cat <<EOF
 3. config/instance.env now sets PROJECT_ID=${PROJECT_ID} (committed and pushed).
-   Make sure config/aoi.geojson is your own AOI (committed + pushed), then run
-   the "Deploy instance" workflow from the Actions tab.
+   Make sure config/aoi.geojson is your own AOI (committed + pushed).
 EOF
         ;;
     committed)
         cat <<EOF
 3. config/instance.env now sets PROJECT_ID=${PROJECT_ID}, committed locally but
    NOT pushed (authenticate to GitHub, then: git push). Make sure
-   config/aoi.geojson is your own AOI, push both, then run the
-   "Deploy instance" workflow from the Actions tab.
+   config/aoi.geojson is your own AOI, and push both.
 EOF
         ;;
     synced)
         cat <<EOF
 3. config/instance.env already sets PROJECT_ID=${PROJECT_ID}. Make sure it and
-   your config/aoi.geojson are pushed, then run the "Deploy instance" workflow
-   from the Actions tab.
+   your config/aoi.geojson are pushed.
 EOF
         ;;
     *)
         cat <<EOF
-3. Commit your config (config/instance.env with PROJECT_ID=${PROJECT_ID}, and
-   config/aoi.geojson), then run the "Deploy instance" workflow from the
-   Actions tab.
+3. Commit and push your config (config/instance.env with
+   PROJECT_ID=${PROJECT_ID}, and config/aoi.geojson).
 EOF
         ;;
 esac
@@ -273,13 +269,38 @@ esac
 if [ "${AOI_IS_SAMPLE}" = "1" ]; then
     cat <<EOF
 
-Note: config/aoi.geojson is still the bundled sample AOI — replace it with
-your own (build one at https://jackrsteiner.github.io/aoi-maker/) before
-deploying.
+   Note: config/aoi.geojson is still the bundled sample AOI — replace it with
+   your own (build one at https://jackrsteiner.github.io/aoi-maker/) before
+   deploying.
 EOF
 fi
 
+# Tunnel details for the closing instructions: honor the committed config when
+# this ran inside the instance clone, otherwise fall back to the defaults.
+TUNNEL_INSTANCE="forest-sentinel-vm"
+TUNNEL_ZONE="us-west1-a"
+TUNNEL_PORT="8000"
+if [ "${CONFIG_STATUS}" != "manual" ] && [ -f "${repo_root}/${INSTANCE_ENV_FILE}" ]; then
+    v="$(sed -n 's/^INSTANCE_NAME=//p' "${repo_root}/${INSTANCE_ENV_FILE}" | head -n 1)"
+    [ -n "${v}" ] && TUNNEL_INSTANCE="${v}"
+    v="$(sed -n 's/^ZONE=//p' "${repo_root}/${INSTANCE_ENV_FILE}" | head -n 1)"
+    [ -n "${v}" ] && TUNNEL_ZONE="${v}"
+    v="$(sed -n 's/^DASHBOARD_PORT=//p' "${repo_root}/${INSTANCE_ENV_FILE}" | head -n 1)"
+    [ -n "${v}" ] && TUNNEL_PORT="${v}"
+fi
+
 cat <<EOF
+
+4. Run the deployment: repo -> Actions tab -> "Deploy instance" -> Run workflow.
+   It grafts the template history, provisions GCP and the VM, and waits for the
+   dashboard to come up (the first boot takes ~8 minutes).
+
+5. View the dashboard. From Cloud Shell:
+     gcloud compute ssh ${TUNNEL_INSTANCE} --zone ${TUNNEL_ZONE} -- -N -4 -L 8080:localhost:${TUNNEL_PORT}
+   then click the "Web Preview" button (the small monitor-with-a-dot icon at
+   the top right of the Cloud Shell toolbar) -> "Preview on port 8080".
+   (From your own machine instead: ... -L ${TUNNEL_PORT}:localhost:${TUNNEL_PORT} and open
+   http://localhost:${TUNNEL_PORT})
 
 To revoke GitHub's provisioning access later, run scripts/teardown_gcp.sh or:
   gcloud iam workload-identity-pools providers delete ${PROVIDER_ID} \\
