@@ -333,7 +333,13 @@ It ships **disabled** (guarded by `if: false` and a commented `schedule`). To en
 
 - **COG retention.** The 30 GB disk is shared by Postgres and `/data/cogs`. It is
   finite — prune old COGs (e.g. a cron `find /data/cogs -mtime +90 -delete`) before it
-  fills. A formal retention policy is future work.
+  fills. Never prune COGs newer than the scheduler's `WINDOW_DAYS` (plus a margin for
+  the trailing baseline): the pipeline re-exports any missing in-window COG on the next
+  run, re-spending Earth Engine quota, and a re-exported (non-frozen) change raster is
+  recomputed against the priors indexed *now*, rewriting its recorded baseline
+  provenance. Keep the database rows — they are the reproduction recipe. A formal
+  retention policy is future work (#80; design constraints in
+  [`docs/architecture.md`](docs/architecture.md) §7).
 - **Database backups.** `pg_dump` the `forest_sentinel` database on a schedule;
   store dumps off-VM.
 - **Logs.** `journalctl -u forest-sentinel-pipeline` and

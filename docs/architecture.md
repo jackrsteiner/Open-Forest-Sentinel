@@ -460,7 +460,29 @@ Earlier revisions listed detection thresholds, the tracking algorithm, the dashb
 and the concrete schemas as TBD; those are now resolved and recorded in §5.1–§5.10. The points
 that remain genuinely open, to be settled in implementation beads under the relevant epics:
 
-- Retention policy for COGs and observations (the VM disk is finite; see §4b).
+- Retention policy for COGs and observations (the VM disk is finite; see §4b). Tracked as the
+  automated-retention bead (#80, epic E19 #76). Constraints any implementation must respect —
+  settled by how the pipeline already works, recorded here so the bead and the methodology
+  writeup stay consistent:
+  - **Exported COGs are outputs, never inputs.** Baselines, deltas, and candidates are always
+    (re)computed in Earth Engine from the source HLS scenes via the recorded
+    `observation.source_scene_id`; no pipeline stage reads a local COG back. Conclusions
+    (observations, quality masks, candidates, events, and their provenance rows) are
+    **database-resident**, and the source imagery is re-derivable from the collection ids and
+    EE script version pinned in `methodology_version.parameters` — so pruning COGs does not
+    endanger the reproducibility of conclusions.
+  - **Never prune inside the scheduler's active window** (`WINDOW_DAYS`, plus a margin covering
+    the trailing baseline). The reuse check (#77) treats a missing COG as "re-export": an early
+    prune silently re-spends Earth Engine quota, and for a **non-frozen** change raster the
+    re-export recomputes the baseline against the priors indexed *now* and rewrites its
+    `change_raster_source` provenance. Beyond the window, prune files freely — but keep the
+    database rows: they are the reproduction recipe (frozen rasters are never recomputed, so a
+    pruned frozen COG is only a dangling `cog_path`, which nothing serves today).
+  - **Features that need raster values must persist them at extraction time.** The E15
+    confidence model's change-magnitude / persistence inputs (and their E16 radar equivalents)
+    must be computed in EE when candidates are extracted and stored per candidate (e.g. mean/max
+    ΔNBR) — not read later from historical COGs, which would silently make COG retention
+    load-bearing.
 - The confidence scoring rule and `confidence_assessment` schema (E15, Slice 4).
 - The manual-review workflow, its schema, and the authentication / access model for review
   (and any future non-read-only dashboard surface) (E8, Slice 3).
