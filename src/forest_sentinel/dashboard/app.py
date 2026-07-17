@@ -101,14 +101,21 @@ def create_app() -> FastAPI:
     def list_aois(session: SessionDep) -> list[dict[str, Any]]:
         """AOIs with summary metrics (event counts)."""
         rows = session.execute(
-            select(Aoi.id, Aoi.name, func.count(DisturbanceEvent.id))
+            select(Aoi.id, Aoi.name, Aoi.geometry, func.count(DisturbanceEvent.id))
             .outerjoin(DisturbanceEvent, DisturbanceEvent.aoi_id == Aoi.id)
-            .group_by(Aoi.id, Aoi.name)
+            .group_by(Aoi.id)
             .order_by(Aoi.name)
         ).all()
         return [
-            {"id": aoi_id, "name": name, "event_count": event_count}
-            for aoi_id, name, event_count in rows
+            {
+                "id": aoi_id,
+                "name": name,
+                "event_count": event_count,
+                # [min_lon, min_lat, max_lon, max_lat] — enough for the map to
+                # zoom to the AOI without shipping its full boundary.
+                "bbox": list(to_shape(geometry).bounds),
+            }
+            for aoi_id, name, geometry, event_count in rows
         ]
 
     @app.post("/api/aois", status_code=201)

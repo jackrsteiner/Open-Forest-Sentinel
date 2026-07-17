@@ -43,7 +43,15 @@ def test_list_aois_reports_event_counts(client: TestClient, db_session: Session)
     response = client.get("/api/aois")
     assert response.status_code == 200
     body = response.json()
-    assert body == [{"id": body[0]["id"], "name": "Seeded AOI", "event_count": 1}]
+    assert body == [
+        {
+            "id": body[0]["id"],
+            "name": "Seeded AOI",
+            "event_count": 1,
+            # The unit-square fixture AOI, as [min_lon, min_lat, max_lon, max_lat].
+            "bbox": [0.0, 0.0, 1.0, 1.0],
+        }
+    ]
 
 
 def test_aoi_events_returns_geojson_feature_collection(

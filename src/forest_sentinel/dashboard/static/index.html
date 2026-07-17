@@ -90,6 +90,7 @@
 
       let eventsLayer = null;
       const layersById = {};
+      const aoiBboxById = {};
       let currentAoiId = null;
       // A "running" run whose last progress event is older than this is likely dead
       // (SIGKILL / systemd timeout before the next run flips it to "interrupted").
@@ -104,6 +105,7 @@
         const select = document.getElementById("aoi-select");
         select.innerHTML = "";
         aois.forEach((aoi) => {
+          aoiBboxById[aoi.id] = aoi.bbox;
           const option = document.createElement("option");
           option.value = aoi.id;
           option.textContent = `${aoi.name} (${aoi.event_count} events)`;
@@ -112,8 +114,23 @@
         if (aois.length) loadEvents(aois[0].id);
       }
 
+      // Zoom to the selected AOI: [min_lon, min_lat, max_lon, max_lat] → Leaflet's
+      // [[south, west], [north, east]].
+      function zoomToAoi(aoiId) {
+        const bbox = aoiBboxById[aoiId];
+        if (!bbox) return;
+        map.fitBounds(
+          [
+            [bbox[1], bbox[0]],
+            [bbox[3], bbox[2]],
+          ],
+          { maxZoom: 12 },
+        );
+      }
+
       async function loadEvents(aoiId) {
         currentAoiId = aoiId;
+        zoomToAoi(aoiId);
         loadRuns(aoiId);
         const collection = await (await fetch(`/api/aois/${aoiId}/events`)).json();
         if (eventsLayer) map.removeLayer(eventsLayer);
@@ -134,7 +151,8 @@
         const features = collection.features;
         document.getElementById("summary").textContent = `${features.length} disturbance events`;
         renderEventList(features);
-        if (features.length) map.fitBounds(eventsLayer.getBounds(), { maxZoom: 12 });
+        // The map frames the whole AOI (zoomToAoi above); clicking an event in
+        // the list or on the map still zooms to that event.
       }
 
       function runStatusLabel(run) {
