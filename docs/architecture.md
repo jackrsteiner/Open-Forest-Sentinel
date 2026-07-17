@@ -460,10 +460,12 @@ Earlier revisions listed detection thresholds, the tracking algorithm, the dashb
 and the concrete schemas as TBD; those are now resolved and recorded in §5.1–§5.10. The points
 that remain genuinely open, to be settled in implementation beads under the relevant epics:
 
-- Retention policy for COGs and observations (the VM disk is finite; see §4b). Tracked as the
-  automated-retention bead (#80, epic E19 #76). Constraints any implementation must respect —
-  settled by how the pipeline already works, recorded here so the bead and the methodology
-  writeup stay consistent:
+- Retention policy for COGs and observations (the VM disk is finite; see §4b). **COG
+  retention shipped** (#80, epic E19 #76): `COG_RETENTION_DAYS` in `config/instance.env`,
+  applied daily by the `forest-sentinel-prune` timer (`DEPLOYMENT.md` §8); retention for
+  database rows (observations and downstream) remains open. Constraints the implementation
+  respects — settled by how the pipeline already works, recorded here so the code and the
+  methodology writeup stay consistent:
   - **Exported COGs are outputs, never inputs.** Baselines, deltas, and candidates are always
     (re)computed in Earth Engine from the source HLS scenes via the recorded
     `observation.source_scene_id`; no pipeline stage reads a local COG back. Conclusions

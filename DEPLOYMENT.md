@@ -332,14 +332,19 @@ It ships **disabled** (guarded by `if: false` and a commented `schedule`). To en
 ## 8. Operations
 
 - **COG retention.** The 30 GB disk is shared by Postgres and `/data/cogs`. It is
-  finite — prune old COGs (e.g. a cron `find /data/cogs -mtime +90 -delete`) before it
-  fills. Never prune COGs newer than the scheduler's `WINDOW_DAYS` (plus a margin for
-  the trailing baseline): the pipeline re-exports any missing in-window COG on the next
-  run, re-spending Earth Engine quota, and a re-exported (non-frozen) change raster is
-  recomputed against the priors indexed *now*, rewriting its recorded baseline
-  provenance. Keep the database rows — they are the reproduction recipe. A formal
-  retention policy is future work (#80; design constraints in
-  [`docs/architecture.md`](docs/architecture.md) §7).
+  finite, so retention is automated (#80): the `forest-sentinel-prune` systemd timer
+  (installed by `vm_setup.sh`, daily at 02:30 UTC) runs `forest-sentinel cogs prune`,
+  which deletes catalog COGs whose **acquisition date** (the store's
+  `{aoi}/{product}/{date}/` path component, not file mtime) is older than
+  `COG_RETENTION_DAYS` (`config/instance.env`, default 90; blank/0 keeps everything).
+  Two guardrails, per the design constraints in
+  [`docs/architecture.md`](docs/architecture.md) §7: the effective retention is
+  floored at `WINDOW_DAYS` + a 14-day margin (pruning inside the active window would
+  re-spend Earth Engine quota on re-exports and rewrite non-frozen change rasters'
+  recorded baseline provenance — the job warns and applies the floor instead), and
+  **database rows are never deleted** — they are the reproduction recipe, and the
+  pipeline's missing-file path re-exports a pruned raster on demand. Preview with
+  `./scripts/prune_cogs.sh --dry-run`.
 - **Database backups.** `pg_dump` the `forest_sentinel` database on a schedule;
   store dumps off-VM.
 - **Logs.** `journalctl -u forest-sentinel-pipeline` and
