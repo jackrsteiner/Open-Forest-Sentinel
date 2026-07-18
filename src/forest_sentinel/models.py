@@ -63,14 +63,42 @@ class Aoi(Base):
     )
 
 
+class SensorSource(Base):
+    """Registry of source datasets (README ``sensor_source``).
+
+    Maps each ``observation.sensor`` string to the dataset behind it: kind
+    (optical/radar), the Earth Engine collection id, and free-form details.
+    Seeded by migration ``0015`` with HLSL30 / HLSS30 / S1GRD.
+    """
+
+    __tablename__ = "sensor_source"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_sensor_source_name"),
+        # Rendered ck_sensor_source_kind by the metadata naming convention.
+        CheckConstraint("kind IN ('optical', 'radar')", name="kind"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    collection: Mapped[str] = mapped_column(String, nullable=False)
+    # "details" not "metadata": the latter is reserved by SQLAlchemy's Base.
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class Observation(Base):
-    """One HLS imagery acquisition over an AOI: the source record every derived
+    """One imagery acquisition over an AOI: the source record every derived
     artifact traces back to. Source data, so it carries no ``methodology_version``.
     """
 
     __tablename__ = "observation"
     __table_args__ = (
-        # HLS discovery is idempotent per AOI: the same scene is recorded once.
+        # Discovery is idempotent per AOI: the same scene is recorded once.
         UniqueConstraint("aoi_id", "source_scene_id", name="uq_observation_aoi_id_source_scene_id"),
         Index("ix_observation_aoi_id_acquired_at", "aoi_id", "acquired_at"),
     )
@@ -81,6 +109,11 @@ class Observation(Base):
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_scene_id: Mapped[str] = mapped_column(String, nullable=False)
     cloud_cover_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Radar-only (Sentinel-1, #115): backscatter baselines must be built from
+    # same-orbit-direction scenes, so the geometry is recorded at discovery.
+    # Null for optical observations.
+    orbit_direction: Mapped[str | None] = mapped_column(String, nullable=True)
+    relative_orbit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

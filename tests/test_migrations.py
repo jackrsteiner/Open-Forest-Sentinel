@@ -476,3 +476,39 @@ def test_downgrade_removes_confidence_assessment_table(
     command.downgrade(alembic_config, "0013_manual_review")
 
     assert "confidence_assessment" not in inspect(clean_database).get_table_names()
+
+
+def test_migrations_create_sensor_source_and_orbit_fields(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "sensor_source" in inspector.get_table_names()
+    columns = {column["name"] for column in inspector.get_columns("sensor_source")}
+    assert {"id", "name", "kind", "collection", "details", "created_at"} <= columns
+
+    with clean_database.connect() as connection:
+        rows = connection.execute(
+            text("SELECT name, kind, collection FROM sensor_source ORDER BY id")
+        ).all()
+    assert [tuple(row) for row in rows] == [
+        ("HLSL30", "optical", "NASA/HLS/HLSL30/v002"),
+        ("HLSS30", "optical", "NASA/HLS/HLSS30/v002"),
+        ("S1GRD", "radar", "COPERNICUS/S1_GRD"),
+    ]
+
+    observation_columns = {c["name"] for c in inspector.get_columns("observation")}
+    assert {"orbit_direction", "relative_orbit"} <= observation_columns
+
+
+def test_downgrade_removes_sensor_source_and_orbit_fields(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "0014_confidence_assessment")
+
+    inspector = inspect(clean_database)
+    assert "sensor_source" not in inspector.get_table_names()
+    observation_columns = {c["name"] for c in inspector.get_columns("observation")}
+    assert observation_columns.isdisjoint({"orbit_direction", "relative_orbit"})
