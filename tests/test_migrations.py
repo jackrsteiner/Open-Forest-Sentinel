@@ -330,3 +330,29 @@ def test_downgrade_removes_pipeline_run_methodology_column(
 
     columns = {column["name"] for column in inspect(clean_database).get_columns("pipeline_run")}
     assert "methodology_version_id" not in columns
+
+
+def test_migrations_add_candidate_statistics_columns(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    columns = {
+        column["name"]: column
+        for column in inspect(clean_database).get_columns("disturbance_candidate")
+    }
+    for name in ("delta_mean", "delta_min", "valid_pixel_fraction"):
+        assert name in columns
+        assert columns[name]["nullable"]  # pre-#95 rows stay null
+
+
+def test_downgrade_removes_candidate_statistics_columns(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "0010_pipeline_run_methodology")
+
+    columns = {
+        column["name"] for column in inspect(clean_database).get_columns("disturbance_candidate")
+    }
+    assert columns.isdisjoint({"delta_mean", "delta_min", "valid_pixel_fraction"})

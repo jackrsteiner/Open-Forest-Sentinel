@@ -199,6 +199,12 @@ class DisturbanceCandidate(Base):
     )
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     area_m2: Mapped[float] = mapped_column(Float, nullable=False)
+    # ΔNBR statistics computed in Earth Engine at extraction time and persisted
+    # here so they survive COG pruning — never re-derived from stored rasters
+    # (docs/architecture.md §7). Null on rows extracted before these columns.
+    delta_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delta_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    valid_pixel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
