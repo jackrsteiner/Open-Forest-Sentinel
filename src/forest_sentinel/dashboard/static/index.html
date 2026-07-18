@@ -45,6 +45,14 @@
       .conf-high { background: #27ae60; }
       .conf-medium { background: #e67e22; }
       .conf-low { background: #95a5a6; }
+      /* Detection basis (E16/#119): which sensor kind(s) saw it — fourth
+         visual axis, filled like confidence but in sensor hues. */
+      .basis {
+        border-radius: 3px; padding: 0 5px; font-size: 11px; margin-left: 4px; color: #fff;
+      }
+      .basis-optical-only { background: #3498db; }
+      .basis-radar-only { background: #8e44ad; }
+      .basis-both { background: #16a085; }
       .conf-explain { font-size: 12px; color: #555; margin: 2px 0 2px 12px; }
       .conf-history { font-size: 12px; color: #888; margin: 2px 0 2px 12px; }
       #event-filters { margin: 8px 0 2px; font-size: 12px; }
@@ -120,6 +128,13 @@
           <option value="medium">medium</option>
           <option value="low">low</option>
           <option value="unassessed">unassessed</option>
+        </select>
+        basis
+        <select id="filter-basis">
+          <option value="">all</option>
+          <option value="optical-only">optical</option>
+          <option value="radar-only">radar</option>
+          <option value="both">optical+radar</option>
         </select>
       </div>
       <div id="events"></div>
@@ -210,8 +225,13 @@
         } else if (opinion && p.latest_opinion !== opinion) {
           return false;
         }
-        if (confidence === "unassessed") return p.confidence_level == null;
-        if (confidence && p.confidence_level !== confidence) return false;
+        if (confidence === "unassessed") {
+          if (p.confidence_level != null) return false;
+        } else if (confidence && p.confidence_level !== confidence) {
+          return false;
+        }
+        const basis = document.getElementById("filter-basis").value;
+        if (basis && p.basis !== basis) return false;
         return true;
       }
 
@@ -237,6 +257,10 @@
             }),
             onEachFeature: (feature, layer) => {
               layersById[feature.properties.id] = layer;
+              // Attribution at a glance (#119): the popup carries the same
+              // status / basis badges as the card. Server-enumerated values
+              // only — no free text — so innerHTML is safe here.
+              layer.bindPopup(popupHtml(feature.properties));
               layer.on("click", () => showEvent(feature.properties.id));
             },
           },
@@ -481,6 +505,33 @@
         return opinion === "false_positive" ? "false positive" : opinion;
       }
 
+      function basisLabel(basis) {
+        return (
+          { "optical-only": "optical", "radar-only": "radar", both: "optical+radar" }[basis] ||
+          basis
+        );
+      }
+
+      function basisBadge(basis) {
+        const badge = document.createElement("span");
+        badge.className = `basis basis-${basis}`;
+        badge.textContent = basisLabel(basis);
+        return badge;
+      }
+
+      function popupHtml(p) {
+        const conf = p.confidence_level
+          ? ` <span class="conf conf-${p.confidence_level}">${p.confidence_level}</span>`
+          : "";
+        const basis = p.basis
+          ? ` <span class="basis basis-${p.basis}">${basisLabel(p.basis)}</span>`
+          : "";
+        return (
+          `<strong>Event #${p.id}</strong> ` +
+          `<span class="status-${p.status}">${p.status}</span>${conf}${basis}`
+        );
+      }
+
       function opinionBadge(opinion) {
         const badge = document.createElement("span");
         badge.className = `opinion opinion-${opinion}`;
@@ -517,9 +568,50 @@
             conf.title = p.confidence_score != null ? `score ${p.confidence_score}` : "";
             div.querySelector(".muted").before(conf);
           }
+          // Detection basis (#119): optical / radar / optical+radar, from the
+          // agreement classification. Absent until the first fused assessment.
+          if (p.basis) div.querySelector(".muted").before(basisBadge(p.basis));
           div.onclick = () => showEvent(p.id);
           container.appendChild(div);
         });
+      }
+
+      // Sensor attribution (#119, README questions 7-8): which method produced
+      // the detection and whether the other lineage agrees — display only,
+      // read from the lineage's methodology and the recorded assessment inputs.
+      function detectionSection(detail) {
+        const wrap = document.createElement("div");
+        const heading = document.createElement("div");
+        heading.className = "timeline";
+        heading.innerHTML = "<em>Detection:</em>";
+        wrap.appendChild(heading);
+        const line = document.createElement("div");
+        line.className = "conf-explain";
+        if (detail.basis) {
+          line.appendChild(basisBadge(detail.basis));
+          line.appendChild(document.createTextNode(" "));
+        }
+        const method = detail.methodology
+          ? `method ${detail.methodology.name} v${detail.methodology.display_version}`
+          : "method unknown";
+        line.appendChild(
+          document.createTextNode(detail.basis ? method : `basis not yet assessed · ${method}`),
+        );
+        wrap.appendChild(line);
+        const factors = detail.confidence.length
+          ? detail.confidence[0].inputs.factors || {}
+          : {};
+        const agreement = factors.agreement || {};
+        if (detail.basis === "both" && (agreement.matching_candidate_ids || []).length) {
+          const ids = agreement.matching_candidate_ids.map((id) => `#${id}`).join(", ");
+          const agree = document.createElement("div");
+          agree.className = "conf-explain";
+          agree.textContent =
+            `agreeing ${agreement.other_kind || "other-lineage"} candidates: ${ids} ` +
+            `(within ±${agreement.window_days} days)`;
+          wrap.appendChild(agree);
+        }
+        return wrap;
       }
 
       // The explained "why" of the latest assessment: rendered entirely from
@@ -676,6 +768,7 @@
           detailDiv.innerHTML =
             `<div class="timeline"><em>Timeline (expansion):</em></div>${rows}` +
             `<div class="timeline"><em>Evidence:</em></div>${evidence}`;
+          detailDiv.prepend(detectionSection(detail));
           detailDiv.appendChild(confidenceSection(detail));
           detailDiv.appendChild(reviewSection(detail));
           card2.appendChild(detailDiv);
@@ -823,6 +916,7 @@
       document.getElementById("filter-status").addEventListener("change", renderEvents);
       document.getElementById("filter-opinion").addEventListener("change", renderEvents);
       document.getElementById("filter-confidence").addEventListener("change", renderEvents);
+      document.getElementById("filter-basis").addEventListener("change", renderEvents);
       document.getElementById("aoi-upload").addEventListener("click", uploadAoi);
       document.getElementById("aoi-select").addEventListener("change", (e) =>
         loadEvents(e.target.value),

@@ -426,10 +426,20 @@ def create_app() -> FastAPI:
         timeline = _timeline(session, event_id)
         reviews = _reviews(session, event_id)
         assessments = _assessments(session, event_id)
+        # The lineage's methodology IS the "which method produced this" answer
+        # (README deliverable questions 7-8): events are methodology-scoped.
+        methodology = session.get(MethodologyVersion, event.methodology_version_id)
         return {
             "id": event.id,
             "aoi_id": event.aoi_id,
             "status": event.status,
+            "methodology": None
+            if methodology is None
+            else {
+                "id": methodology.id,
+                "name": methodology.name,
+                "display_version": methodology.display_version,
+            },
             "first_detected_at": event.first_detected_at,
             "last_detected_at": event.last_detected_at,
             "geometry": mapping(to_shape(event.geometry)),

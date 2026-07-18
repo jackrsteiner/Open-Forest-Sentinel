@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from forest_sentinel.dashboard.app import app, get_session
 from forest_sentinel.events import footprint_area_m2, track_events_for_aoi
 from forest_sentinel.models import Aoi, DisturbanceEvent, PipelineRun, PipelineRunEvent
-from tests.fakes import make_aoi, make_candidate, make_methodology
+from tests.fakes import make_aoi, make_candidate, make_methodology, make_radar_methodology
 
 _PATCH = [(0.1, 0.1), (0.2, 0.1), (0.2, 0.2), (0.1, 0.2), (0.1, 0.1)]
 _PATCH_GROWN = [(0.15, 0.1), (0.3, 0.1), (0.3, 0.2), (0.15, 0.2), (0.15, 0.1)]
@@ -709,6 +709,39 @@ def test_event_features_and_detail_carry_confidence(
     # seeded, so this optical event reads optical-only on features and detail.
     assert props["basis"] == "optical-only"
     assert detail["basis"] == "optical-only"
+
+    # Method attribution (#119): the lineage's methodology IS the "which
+    # method produced this detection" answer.
+    assert detail["methodology"]["name"] == "optical-change"
+    assert detail["methodology"]["display_version"] == "1.0.0"
+
+
+def test_cross_lineage_events_read_both_basis_and_their_method(
+    client: TestClient, db_session: Session
+) -> None:
+    """#119: agreeing lineages read "both", each attributed to its own method."""
+    from forest_sentinel.confidence import assess_events_for_aoi
+
+    aoi = make_aoi(db_session, name="Seeded AOI")
+    optical = make_methodology(db_session)
+    radar = make_radar_methodology(db_session)
+    make_candidate(db_session, aoi, optical, day=1, ring=_PATCH, area_m2=10_000.0, delta_min=-0.5)
+    make_candidate(db_session, aoi, radar, day=3, ring=_PATCH, area_m2=10_000.0, sensor="S1GRD")
+    track_events_for_aoi(db_session, aoi=aoi)
+    assess_events_for_aoi(db_session, aoi=aoi, now=datetime(2026, 1, 10, tzinfo=UTC))
+    db_session.flush()
+
+    features = client.get(f"/api/aois/{aoi.id}/events").json()["features"]
+    assert len(features) == 2
+    assert {f["properties"]["basis"] for f in features} == {"both"}
+
+    details = [client.get(f"/api/events/{f['properties']['id']}").json() for f in features]
+    assert {d["methodology"]["name"] for d in details} == {"optical-change", "radar-change"}
+    for detail in details:
+        assert detail["basis"] == "both"
+        agreement = detail["confidence"][0]["inputs"]["factors"]["agreement"]
+        # The agreeing other-lineage evidence is enumerable from the detail.
+        assert agreement["matching_candidate_ids"]
 
 
 def test_unassessed_events_read_null_confidence(client: TestClient, db_session: Session) -> None:
