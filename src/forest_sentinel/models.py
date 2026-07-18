@@ -11,6 +11,7 @@ from typing import Any
 from geoalchemy2 import Geometry
 from geoalchemy2.elements import WKBElement
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -259,6 +260,45 @@ class DisturbanceEvent(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     first_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+# The opinions a manual review may record — a human judgment held ALONGSIDE the
+# automatic event status, never a mutation of it (docs/architecture.md §5.9/§7).
+REVIEW_OPINIONS = ("confirmed", "false_positive", "uncertain", "resolved")
+
+
+class ManualReview(Base):
+    """An append-only human opinion about a disturbance event.
+
+    Reviews record what a person concluded (`confirmed`/`false_positive`/
+    `uncertain`/`resolved`, with optional notes and a free-text reviewer name —
+    tunnel-as-auth has no identity to bind). The latest row per event is the
+    current opinion; rows are never updated or deleted individually, so the
+    review history is inspectable like every other provenance record.
+    """
+
+    __tablename__ = "manual_review"
+    __table_args__ = (
+        # Rendered ck_manual_review_opinion by the metadata naming convention.
+        CheckConstraint(
+            "opinion IN ('confirmed', 'false_positive', 'uncertain', 'resolved')",
+            name="opinion",
+        ),
+        Index("ix_manual_review_event_id", "event_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("disturbance_event.id", ondelete="CASCADE"), nullable=False
+    )
+    opinion: Mapped[str] = mapped_column(String, nullable=False)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    reviewer: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

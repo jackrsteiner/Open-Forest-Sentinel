@@ -22,6 +22,8 @@ from forest_sentinel.models import (
     Aoi,
     ChangeRaster,
     DisturbanceCandidate,
+    DisturbanceEvent,
+    ManualReview,
     MethodologyVersion,
     Observation,
 )
@@ -258,3 +260,18 @@ def make_candidate(
     session.add(candidate)
     session.flush()
     return candidate
+
+
+def make_review(
+    session: Session,
+    event: DisturbanceEvent,
+    *,
+    opinion: str = "confirmed",
+    notes: str | None = None,
+    reviewer: str | None = None,
+) -> ManualReview:
+    """Append one manual-review opinion to an event."""
+    review = ManualReview(event_id=event.id, opinion=opinion, notes=notes, reviewer=reviewer)
+    session.add(review)
+    session.flush()
+    return review

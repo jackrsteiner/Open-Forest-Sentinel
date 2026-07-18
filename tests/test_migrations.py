@@ -404,3 +404,34 @@ def test_downgrade_removes_methodology_display_version(
         column["name"] for column in inspect(clean_database).get_columns("methodology_version")
     }
     assert "display_version" not in columns
+
+
+def test_migrations_create_manual_review_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "manual_review" in inspector.get_table_names()
+
+    columns = {column["name"] for column in inspector.get_columns("manual_review")}
+    assert {"id", "event_id", "opinion", "notes", "reviewer", "created_at"} <= columns
+
+    fks = inspector.get_foreign_keys("manual_review")
+    assert any(
+        fk["referred_table"] == "disturbance_event" and fk["options"].get("ondelete") == "CASCADE"
+        for fk in fks
+    )
+    checks = {constraint["name"] for constraint in inspector.get_check_constraints("manual_review")}
+    assert "ck_manual_review_opinion" in checks
+    indexes = {index["name"] for index in inspector.get_indexes("manual_review")}
+    assert "ix_manual_review_event_id" in indexes
+
+
+def test_downgrade_removes_manual_review_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "0012_methodology_display_version")
+
+    assert "manual_review" not in inspect(clean_database).get_table_names()
