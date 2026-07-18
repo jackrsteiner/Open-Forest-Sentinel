@@ -38,11 +38,13 @@ from forest_sentinel.aoi import (
 from forest_sentinel.db import get_engine
 from forest_sentinel.events import footprint_area_m2
 from forest_sentinel.models import (
+    REVIEW_OPINIONS,
     Aoi,
     ChangeRaster,
     DisturbanceCandidate,
     DisturbanceEvent,
     EventObservation,
+    ManualReview,
     MethodologyVersion,
     PipelineRun,
     PipelineRunEvent,
@@ -61,6 +63,11 @@ AOI_UPLOADS_ENV_VAR = "FOREST_SENTINEL_AOI_UPLOADS"
 # Set to "0" to disable the run-now trigger (vm_setup.sh does this when the
 # dashboard port is opened to the world, same as uploads).
 PIPELINE_TRIGGER_ENV_VAR = "FOREST_SENTINEL_PIPELINE_TRIGGER"
+
+# Set to "0" to disable recording manual reviews (vm_setup.sh does this when
+# the dashboard port is opened to the world — tunnel-as-auth means whoever can
+# reach the dashboard can review, which must not include the open internet).
+REVIEWS_ENV_VAR = "FOREST_SENTINEL_REVIEWS"
 # The same systemd unit the daily timer fires; --no-block returns immediately
 # and systemd merges a start into an already-running job, so repeated clicks
 # are harmless (the per-AOI advisory lock backstops everything else). The `ofs`
@@ -289,6 +296,7 @@ def create_app() -> FastAPI:
                 func.ST_Area(cast(DisturbanceEvent.geometry, Geography)),
                 func.coalesce(latest.c.count, 0),
                 latest.c.area_m2,
+                _latest_opinion_subquery(),
             )
             .outerjoin(latest, latest.c.event_id == DisturbanceEvent.id)
             .where(DisturbanceEvent.aoi_id == aoi_id)
@@ -297,8 +305,8 @@ def create_app() -> FastAPI:
         return {
             "type": "FeatureCollection",
             "features": [
-                _event_feature(event, footprint_area, count, latest_area)
-                for event, footprint_area, count, latest_area in rows
+                _event_feature(event, footprint_area, count, latest_area, latest_opinion)
+                for event, footprint_area, count, latest_area, latest_opinion in rows
             ],
         }
 
@@ -389,11 +397,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/events/{event_id}")
     def event_detail(event_id: int, session: SessionDep) -> dict[str, Any]:
-        """One event with its measurement timeline and supporting evidence."""
+        """One event with its measurement timeline, supporting evidence, and reviews."""
         event = session.get(DisturbanceEvent, event_id)
         if event is None:
             raise HTTPException(status_code=404, detail=f"event {event_id} not found")
         timeline = _timeline(session, event_id)
+        reviews = _reviews(session, event_id)
         return {
             "id": event.id,
             "aoi_id": event.aoi_id,
@@ -404,9 +413,65 @@ def create_app() -> FastAPI:
             "footprint_area_m2": footprint_area_m2(session, event.geometry),
             "timeline": timeline,
             "evidence": _evidence(session, event_id),
+            # Newest first: the head is the current opinion (or None when unreviewed).
+            "reviews": reviews,
+            "latest_opinion": reviews[0]["opinion"] if reviews else None,
+        }
+
+    @app.post("/api/events/{event_id}/reviews", status_code=201)
+    def record_review(
+        event_id: int, session: SessionDep, payload: Annotated[dict[str, Any], Body()]
+    ) -> dict[str, Any]:
+        """Record a manual-review opinion for an event (append-only).
+
+        Opinions are a human judgment recorded ALONGSIDE the automatic status —
+        this endpoint never mutates ``disturbance_event.status``. Requires a JSON
+        body (CORS-preflight defense, like the other POSTs) and is disabled on a
+        world-open dashboard: tunnel-as-auth means whoever can reach the
+        dashboard can review, which must not include the open internet.
+        """
+        if os.environ.get(REVIEWS_ENV_VAR, "1") == "0":
+            raise HTTPException(
+                status_code=403, detail="manual review is disabled on this dashboard"
+            )
+        event = session.get(DisturbanceEvent, event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail=f"event {event_id} not found")
+        opinion = payload.get("opinion")
+        if opinion not in REVIEW_OPINIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"opinion must be one of {', '.join(REVIEW_OPINIONS)}",
+            )
+        review = ManualReview(
+            event_id=event.id,
+            opinion=opinion,
+            notes=_optional_str(payload.get("notes")),
+            reviewer=_optional_str(payload.get("reviewer")),
+        )
+        session.add(review)
+        session.commit()
+        return {
+            "id": review.id,
+            "event_id": review.event_id,
+            "opinion": review.opinion,
+            "notes": review.notes,
+            "reviewer": review.reviewer,
+            "created_at": review.created_at,
         }
 
     return app
+
+
+def _latest_opinion_subquery() -> Any:
+    """Correlated scalar subquery: the newest review's opinion per event, or NULL."""
+    return (
+        select(ManualReview.opinion)
+        .where(ManualReview.event_id == DisturbanceEvent.id)
+        .order_by(ManualReview.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
 
 
 def _event_feature(
@@ -414,6 +479,7 @@ def _event_feature(
     footprint_area: float,
     observation_count: int,
     latest_area: float | None,
+    latest_opinion: str | None,
 ) -> dict[str, Any]:
     return {
         "type": "Feature",
@@ -421,6 +487,9 @@ def _event_feature(
         "properties": {
             "id": event.id,
             "status": event.status,
+            # The newest manual-review opinion — a human judgment held alongside
+            # (never mutating) the automatic status; null when unreviewed.
+            "latest_opinion": latest_opinion,
             "first_detected_at": event.first_detected_at,
             "last_detected_at": event.last_detected_at,
             "observation_count": observation_count,
@@ -429,6 +498,35 @@ def _event_feature(
             "latest_area_m2": latest_area,
         },
     }
+
+
+def _reviews(session: Session, event_id: int) -> list[dict[str, Any]]:
+    rows = (
+        session.execute(
+            select(ManualReview)
+            .where(ManualReview.event_id == event_id)
+            .order_by(ManualReview.id.desc())
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "id": review.id,
+            "opinion": review.opinion,
+            "notes": review.notes,
+            "reviewer": review.reviewer,
+            "created_at": review.created_at,
+        }
+        for review in rows
+    ]
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _timeline(session: Session, event_id: int) -> list[dict[str, Any]]:

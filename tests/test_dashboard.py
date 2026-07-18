@@ -531,3 +531,82 @@ def test_stop_pipeline_run_requires_a_json_body(client: TestClient) -> None:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
     assert response.status_code == 422
+
+
+def test_record_review_appends_and_reads_back(client: TestClient, db_session: Session) -> None:
+    _seed_event(db_session)
+    event_id = db_session.execute(select(DisturbanceEvent.id)).scalar_one()
+
+    first = client.post(
+        f"/api/events/{event_id}/reviews",
+        json={"opinion": "uncertain", "notes": "cloud shadow?", "reviewer": "jack"},
+    )
+    assert first.status_code == 201
+    body = first.json()
+    assert body["opinion"] == "uncertain"
+    assert body["reviewer"] == "jack"
+
+    second = client.post(f"/api/events/{event_id}/reviews", json={"opinion": "confirmed"})
+    assert second.status_code == 201
+
+    detail = client.get(f"/api/events/{event_id}").json()
+    # Newest first; the head is the current opinion.
+    assert [review["opinion"] for review in detail["reviews"]] == ["confirmed", "uncertain"]
+    assert detail["latest_opinion"] == "confirmed"
+    # The automatic status is untouched by review.
+    assert detail["status"] == "ongoing"
+
+    aoi_id = detail["aoi_id"]
+    features = client.get(f"/api/aois/{aoi_id}/events").json()["features"]
+    assert features[0]["properties"]["latest_opinion"] == "confirmed"
+
+
+def test_unreviewed_events_read_null_opinion(client: TestClient, db_session: Session) -> None:
+    aoi = _seed_event(db_session)
+    features = client.get(f"/api/aois/{aoi.id}/events").json()["features"]
+    assert features[0]["properties"]["latest_opinion"] is None
+    event_id = features[0]["properties"]["id"]
+    detail = client.get(f"/api/events/{event_id}").json()
+    assert detail["reviews"] == []
+    assert detail["latest_opinion"] is None
+
+
+def test_record_review_rejects_unknown_opinion(client: TestClient, db_session: Session) -> None:
+    _seed_event(db_session)
+    event_id = db_session.execute(select(DisturbanceEvent.id)).scalar_one()
+    response = client.post(f"/api/events/{event_id}/reviews", json={"opinion": "looks-bad"})
+    assert response.status_code == 422
+    assert "opinion must be one of" in response.json()["detail"]
+
+
+def test_record_review_unknown_event_is_404(client: TestClient) -> None:
+    assert (
+        client.post("/api/events/999999/reviews", json={"opinion": "confirmed"}).status_code == 404
+    )
+
+
+def test_record_review_can_be_disabled(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_event(db_session)
+    event_id = db_session.execute(select(DisturbanceEvent.id)).scalar_one()
+    monkeypatch.setenv("FOREST_SENTINEL_REVIEWS", "0")
+    response = client.post(f"/api/events/{event_id}/reviews", json={"opinion": "confirmed"})
+    assert response.status_code == 403
+    assert "disabled" in response.json()["detail"]
+
+
+def test_record_review_requires_a_json_body(client: TestClient, db_session: Session) -> None:
+    _seed_event(db_session)
+    event_id = db_session.execute(select(DisturbanceEvent.id)).scalar_one()
+    response = client.post(
+        f"/api/events/{event_id}/reviews",
+        content="opinion=confirmed",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert response.status_code == 422
+
+
+def test_vm_setup_disables_reviews_on_a_world_open_dashboard() -> None:
+    setup = (Path(__file__).resolve().parents[1] / "scripts" / "vm_setup.sh").read_text()
+    assert 'echo "FOREST_SENTINEL_REVIEWS=0"' in setup
