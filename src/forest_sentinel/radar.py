@@ -37,6 +37,19 @@ from forest_sentinel.storage import CogKey, Storage
 RADAR_CHANGE_TYPE = "delta_vv_db"
 _VV = "VV"
 
+# Documented default: a VV backscatter drop of 3 dB or more vs the trailing
+# median is a candidate. Overridable via the radar methodology parameters.
+DEFAULT_DELTA_VV_DB_THRESHOLD = -3.0
+_DB_THRESHOLD_PARAM = "delta_vv_db_threshold"
+
+
+def resolve_db_threshold(methodology: MethodologyVersion, override: float | None = None) -> float:
+    """dB threshold from the override, else methodology parameters, else default."""
+    if override is not None:
+        return override
+    value = methodology.parameters.get(_DB_THRESHOLD_PARAM)
+    return float(value) if value is not None else DEFAULT_DELTA_VV_DB_THRESHOLD
+
 
 def compute_radar_change_for_observation(
     session: Session,

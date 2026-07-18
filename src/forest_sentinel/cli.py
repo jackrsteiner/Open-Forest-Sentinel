@@ -27,8 +27,10 @@ from forest_sentinel import (
     indices,
     pipeline,
     qa,
+    radar,
     reproduce,
     retention,
+    sentinel1,
     storage,
 )
 from forest_sentinel.aoi import (
@@ -62,6 +64,12 @@ from forest_sentinel.storage import StorageConfigurationError, StorageError
 
 # Pins what Google ran for this build, recorded in the methodology version for reproducibility.
 EE_SCRIPT_VERSION = "slice1-optical-change-v1"
+
+# The radar stage's own pin (Slice 5): radar runs under its own content-addressed
+# methodology (radar-change), so its EE code version is pinned independently.
+RADAR_SCRIPT_VERSION = "slice5-radar-change-v1"
+RADAR_ENV_VAR = "FOREST_SENTINEL_RADAR"
+RADAR_THRESHOLD_ENV_VAR = "FOREST_SENTINEL_RADAR_THRESHOLD"
 
 # How many Earth Engine batch exports the pipeline keeps in flight at once.
 MAX_CONCURRENT_EXPORTS_ENV_VAR = "FOREST_SENTINEL_MAX_CONCURRENT_EXPORTS"
@@ -461,6 +469,30 @@ def _run_pipeline(args: argparse.Namespace) -> int:
                     parameters=parameters,
                     version=args.methodology_version,
                 )
+                # Radar augmentation (Slice 5) is opt-in and runs under its own
+                # content-addressed methodology — separate lineage, separate pin.
+                radar_methodology = None
+                if os.environ.get(RADAR_ENV_VAR, "0") == "1":
+                    radar_threshold_raw = os.environ.get(RADAR_THRESHOLD_ENV_VAR, "")
+                    try:
+                        radar_threshold = float(radar_threshold_raw)
+                    except ValueError:
+                        radar_threshold = radar.DEFAULT_DELTA_VV_DB_THRESHOLD
+                    radar_methodology = resolve_methodology_version(
+                        session,
+                        name="radar-change",
+                        parameters={
+                            "ee_script_version": RADAR_SCRIPT_VERSION,
+                            "collection": sentinel1.S1_COLLECTION,
+                            "metric": "vv_db",
+                            "delta_vv_db_threshold": radar_threshold,
+                            "baseline_window": args.baseline_window,
+                            "orbit_policy": "same_direction",
+                            "scale_m": indices.DEFAULT_SCALE_METERS,
+                            "min_area_m2": min_area,
+                            **forestmask.parameters_entry(forest_mask_config),
+                        },
+                    )
                 # Commit the AOI/methodology rows before the (hours-long) pipeline
                 # body so the dashboard lists the AOI as soon as a run starts,
                 # rather than only after the first full run commits — and even if
@@ -487,6 +519,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
                     resolved_after_days=_positive_int_env(
                         "RESOLVED_AFTER_DAYS", events.DEFAULT_RESOLVED_AFTER_DAYS
                     ),
+                    radar_methodology=radar_methodology,
                 )
                 session.commit()
         except StorageConfigurationError as exc:

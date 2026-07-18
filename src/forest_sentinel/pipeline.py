@@ -22,7 +22,17 @@ from shapely.geometry import mapping
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forest_sentinel import candidates, change, confidence, earthengine, events, indices, runlog
+from forest_sentinel import (
+    candidates,
+    change,
+    confidence,
+    earthengine,
+    events,
+    indices,
+    radar,
+    runlog,
+    sentinel1,
+)
 from forest_sentinel.earthengine import EarthEngineError
 from forest_sentinel.hls import discover_observations
 from forest_sentinel.models import Aoi, MethodologyVersion, Observation
@@ -100,6 +110,9 @@ class PipelineSummary:
     change_rasters_reused: int = 0
     events_resolved: int = 0  # ongoing events auto-resolved this run (quiet + clear look)
     confidence_assessments: int = 0  # appended this run (unchanged conclusions skipped)
+    radar_change_rasters: int = 0  # VV dB deltas produced (radar stage, when enabled)
+    radar_change_rasters_reused: int = 0
+    radar_candidates: int = 0
 
 
 def run_pipeline(
@@ -116,6 +129,7 @@ def run_pipeline(
     scale: int = indices.DEFAULT_SCALE_METERS,
     max_concurrent_exports: int = 1,
     resolved_after_days: int = events.DEFAULT_RESOLVED_AFTER_DAYS,
+    radar_methodology: MethodologyVersion | None = None,
     ee_module: Any = earthengine,
 ) -> PipelineSummary:
     """Run discover → indices → change → candidates → events for one AOI and window.
@@ -153,6 +167,7 @@ def run_pipeline(
                 scale=scale,
                 max_concurrent_exports=max_concurrent_exports,
                 resolved_after_days=resolved_after_days,
+                radar_methodology=radar_methodology,
                 ee_module=ee_module,
                 recorder=recorder,
             )
@@ -184,6 +199,7 @@ def _run_pipeline_locked(
     scale: int,
     max_concurrent_exports: int,
     resolved_after_days: int,
+    radar_methodology: MethodologyVersion | None,
     ee_module: Any,
     recorder: runlog.RunRecorder,
 ) -> PipelineSummary:
@@ -351,6 +367,22 @@ def _run_pipeline_locked(
                 message=str(exc),
             )
 
+    radar_count = radar_reused = radar_candidates = 0
+    if radar_methodology is not None:
+        radar_count, radar_reused, radar_candidates, radar_failures = _run_radar_stage(
+            session,
+            aoi=aoi,
+            since=since,
+            until=until,
+            methodology=radar_methodology,
+            storage=storage,
+            baseline_window=baseline_window,
+            scale=scale,
+            ee_module=ee_module,
+            recorder=recorder,
+        )
+        export_failures += radar_failures
+
     tracking = events.track_events_for_aoi(session, aoi=aoi)
     # Lifecycle after tracking: extension has already reopened any re-detected
     # events, so what remains quiet-past-window (with a clear later look) resolves.
@@ -394,4 +426,124 @@ def _run_pipeline_locked(
         change_rasters_reused=change_reused,
         events_resolved=events_resolved,
         confidence_assessments=assessments,
+        radar_change_rasters=radar_count,
+        radar_change_rasters_reused=radar_reused,
+        radar_candidates=radar_candidates,
     )
+
+
+def _run_radar_stage(
+    session: Session,
+    *,
+    aoi: Aoi,
+    since: date,
+    until: date,
+    methodology: MethodologyVersion,
+    storage: Storage,
+    baseline_window: int,
+    scale: int,
+    ee_module: Any,
+    recorder: runlog.RunRecorder,
+) -> tuple[int, int, int, int]:
+    """Discovery → VV dB deltas → radar candidates, under the radar methodology.
+
+    Mirrors the optical change stage's shape: one batch per observation,
+    per-observation failure isolation with a rollback before the failure event
+    (so a committed change raster always implies extracted candidates), and
+    frozen/reused deltas counting their existing candidates. Radar candidates
+    land in the same ``disturbance_candidate`` table; event tracking downstream
+    is methodology-scoped, so they form their own lineages.
+    """
+    discovery = sentinel1.discover_radar_observations(
+        session, aoi, since=since, until=until, ee_module=ee_module
+    )
+    recorder.record(
+        "radar",
+        "info",
+        message=(
+            f"{discovery.discovered} scenes discovered, {discovery.recorded} recorded, "
+            f"{discovery.skipped} skipped"
+        ),
+    )
+    observations = list(
+        session.execute(
+            select(Observation)
+            .where(Observation.aoi_id == aoi.id)
+            .where(Observation.sensor == sentinel1.S1_SENSOR)
+            .where(Observation.acquired_at >= datetime.combine(since, time.min, tzinfo=UTC))
+            .where(Observation.acquired_at < datetime.combine(until, time.min, tzinfo=UTC))
+            .order_by(Observation.acquired_at)
+        )
+        .scalars()
+        .all()
+    )
+
+    threshold = radar.resolve_db_threshold(methodology)
+    min_area = candidates.resolve_min_area(methodology, None)
+    delta_count = reused_count = candidate_count = failures = 0
+    batches = len(observations)
+    recorder.record("radar", "info", message=f"{batches} batches (one per scene)")
+    for batch_index, observation in enumerate(observations, start=1):
+        try:
+            products = radar.compute_radar_change_for_observation(
+                session,
+                aoi=aoi,
+                observation=observation,
+                methodology=methodology,
+                storage=storage,
+                baseline_window=baseline_window,
+                scale=scale,
+                ee_module=ee_module,
+                on_export_submit=_submit_event(recorder, "radar", batch_index, batches),
+            )
+            observation_candidates = 0
+            for product in products:
+                if product.delta_image is None:
+                    observation_candidates += candidates.count_candidates_for_change_raster(
+                        session, product.change_raster.id
+                    )
+                    continue
+                observation_candidates += len(
+                    candidates.extract_candidates_for_change_raster(
+                        session,
+                        change_raster=product.change_raster,
+                        delta_image=product.delta_image,
+                        region=product.region,
+                        scale=scale,
+                        threshold=threshold,
+                        min_area_m2=min_area,
+                        ee_module=ee_module,
+                    )
+                )
+            delta_count += len(products)
+            reused_count += sum(1 for product in products if product.reused)
+            candidate_count += observation_candidates
+            exported = sum(1 for product in products if product.delta_image is not None)
+            recorder.record(
+                "radar",
+                "succeeded",
+                batch_index=batch_index,
+                batch_total=batches,
+                exports=exported,
+                message=(
+                    f"{exported} exported, "
+                    f"{sum(1 for p in products if p.reused)} reused, "
+                    f"{observation_candidates} candidates"
+                ),
+            )
+        except (StorageError, EarthEngineError) as exc:
+            failures += 1
+            logger.warning(
+                "skipping radar scene %s: change/candidate stage failed (%s)",
+                observation.source_scene_id,
+                exc,
+            )
+            session.rollback()
+            recorder.record(
+                "radar",
+                "failed",
+                batch_index=batch_index,
+                batch_total=batches,
+                message=str(exc),
+            )
+    return delta_count, reused_count, candidate_count, failures

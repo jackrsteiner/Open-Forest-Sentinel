@@ -774,3 +774,98 @@ def test_candidate_extraction_falls_back_to_the_aoi_region(
 
     assert len(fake_ee.calls) == 1
     assert shape(fake_ee.calls[0]["region"]).equals(to_shape(aoi.geometry))
+
+
+def _s1_scene(day: int) -> dict[str, Any]:
+    ms = int(datetime(2026, 1, day, tzinfo=UTC).timestamp() * 1000)
+    return {
+        "id": f"COPERNICUS/S1_GRD/S1A_{day}",
+        "properties": {
+            "system:index": f"S1A_{day}",
+            "system:time_start": ms,
+            "instrumentMode": "IW",
+            "transmitterReceiverPolarisation": ["VV", "VH"],
+            "orbitProperties_pass": "DESCENDING",
+            "relativeOrbitNumber_start": 18,
+        },
+    }
+
+
+def test_radar_stage_produces_separate_lineages(db_session: Session, tmp_path: Path) -> None:
+    """Radar enabled (#117): S1 deltas + candidates under the radar methodology,
+    tracked into their OWN events — optical lineages untouched."""
+    aoi = make_aoi(db_session, name="Radar AOI")
+    methodology = make_methodology(db_session)
+    radar_methodology = make_methodology(
+        db_session,
+        version="radar-auto",
+        parameters={"metric": "vv_db", "delta_vv_db_threshold": -3.0},
+    )
+    fake_ee = FakeEarthEngine(
+        scenes={
+            "NASA/HLS/HLSL30/v002": [_scene(day) for day in (1, 2, 3)],
+            "COPERNICUS/S1_GRD": [_s1_scene(day) for day in (5, 10, 15)],
+        },
+        features=[_CANDIDATE_FEATURE],
+        valid_fraction=0.95,
+    )
+
+    summary = run_pipeline(
+        db_session,
+        aoi=aoi,
+        since=date(2026, 1, 1),
+        until=date(2026, 2, 1),
+        methodology=methodology,
+        storage=FakeStorage(tmp_path),
+        baseline_window=5,
+        radar_methodology=radar_methodology,
+        ee_module=fake_ee,
+    )
+    db_session.commit()
+
+    # 3 S1 scenes; the first has no same-orbit prior -> 2 radar deltas, one
+    # candidate each (the stubbed vectorizer returns one polygon per call).
+    assert summary.radar_change_rasters == 2
+    assert summary.radar_candidates == 2
+    radar_candidates = (
+        db_session.execute(
+            select(DisturbanceCandidate).where(
+                DisturbanceCandidate.methodology_version_id == radar_methodology.id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(radar_candidates) == 2
+    # The overlapping optical and radar candidates form SEPARATE event lineages.
+    events = db_session.execute(select(DisturbanceEvent)).scalars().all()
+    lineages = {event.methodology_version_id for event in events}
+    assert lineages == {methodology.id, radar_methodology.id}
+    # The radar threshold came from the radar methodology, not the optical one.
+    assert any(call["threshold"] == -3.0 for call in fake_ee.calls)
+
+
+def test_radar_disabled_by_default_runs_no_radar_stage(db_session: Session, tmp_path: Path) -> None:
+    aoi = make_aoi(db_session, name="Optical only AOI")
+    methodology = make_methodology(db_session)
+    fake_ee = FakeEarthEngine(
+        scenes={
+            "NASA/HLS/HLSL30/v002": [_scene(1)],
+            "COPERNICUS/S1_GRD": [_s1_scene(5)],
+        },
+    )
+
+    summary = run_pipeline(
+        db_session,
+        aoi=aoi,
+        since=date(2026, 1, 1),
+        until=date(2026, 2, 1),
+        methodology=methodology,
+        storage=FakeStorage(tmp_path),
+        ee_module=fake_ee,
+    )
+
+    assert summary.radar_change_rasters == 0
+    # No S1 observations were even discovered without the radar methodology.
+    sensors = set(db_session.execute(select(Observation.sensor)).scalars().all())
+    assert sensors == {"HLSL30"}
