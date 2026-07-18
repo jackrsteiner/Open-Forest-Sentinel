@@ -22,7 +22,7 @@ from shapely.geometry import mapping
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forest_sentinel import candidates, change, earthengine, events, indices, runlog
+from forest_sentinel import candidates, change, confidence, earthengine, events, indices, runlog
 from forest_sentinel.earthengine import EarthEngineError
 from forest_sentinel.hls import discover_observations
 from forest_sentinel.models import Aoi, MethodologyVersion, Observation
@@ -99,6 +99,7 @@ class PipelineSummary:
     index_rasters_reused: int = 0  # persisted by an earlier run; no export submitted
     change_rasters_reused: int = 0
     events_resolved: int = 0  # ongoing events auto-resolved this run (quiet + clear look)
+    confidence_assessments: int = 0  # appended this run (unchanged conclusions skipped)
 
 
 def run_pipeline(
@@ -366,6 +367,19 @@ def _run_pipeline_locked(
         ),
     )
 
+    # Confidence after lifecycle: assessments see final statuses and dates.
+    assessments = confidence.assess_events_for_aoi(
+        session, aoi=aoi, pipeline_run_id=recorder.run.id
+    )
+    recorder.record(
+        "confidence",
+        "info",
+        message=(
+            f"{assessments} assessment(s) appended "
+            f"(rule {confidence.RULE_VERSION}; unchanged conclusions skipped)"
+        ),
+    )
+
     return PipelineSummary(
         observations_discovered=discovery.discovered,
         observations_recorded=discovery.recorded,
@@ -379,4 +393,5 @@ def _run_pipeline_locked(
         index_rasters_reused=index_reused,
         change_rasters_reused=change_reused,
         events_resolved=events_resolved,
+        confidence_assessments=assessments,
     )

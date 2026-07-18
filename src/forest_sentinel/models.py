@@ -335,6 +335,44 @@ class EventObservation(Base):
     )
 
 
+CONFIDENCE_LEVELS = ("low", "medium", "high")
+
+
+class ConfidenceAssessment(Base):
+    """One explained confidence evaluation of an event (E15) — append-only.
+
+    ``inputs`` records every factor value, subscore, and weight the rule used,
+    plus which factors were unavailable, so the level is fully explainable from
+    the row alone — no recomputation, no reading rasters back. ``rule_version``
+    pins the rule that produced it; assessments under different rule versions
+    are not comparable and the dashboard shows the version alongside the level.
+    """
+
+    __tablename__ = "confidence_assessment"
+    __table_args__ = (
+        # Rendered ck_confidence_assessment_level by the metadata naming convention.
+        CheckConstraint("level IN ('low', 'medium', 'high')", name="level"),
+        Index("ix_confidence_assessment_event_id", "event_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("disturbance_event.id", ondelete="CASCADE"), nullable=False
+    )
+    pipeline_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pipeline_run.id", name="fk_confidence_assessment_run"), nullable=True
+    )
+    level: Mapped[str] = mapped_column(String, nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    rule_version: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class PipelineRun(Base):
     """One pipeline invocation over an AOI and date window.
 

@@ -437,6 +437,29 @@ events rather than falsifying it. The pipeline (`run_pipeline`) calls tracking a
 so a single `forest-sentinel run` goes discover → indices → change → candidates → **events**, and
 the per-stage summary reports events created and event-observations tracked.
 
+### 5.9a Confidence assessments (Slice 4, E15)
+
+**`confidence_assessment`** (migration `0014`) is the append-only, fully explained
+confidence record: `id`, `event_id` (FK, CASCADE), `pipeline_run_id` (FK, nullable),
+`level` (`low`/`medium`/`high`), `score`, `inputs` (JSONB — every factor value,
+subscore, weight, and which factors were unavailable), `rule_version`, `created_at`.
+
+**Rule `optical-v1`** (`forest_sentinel/confidence.py`) is a transparent weighted
+average over normalized factors, all persisted at extraction time (§7 constraint):
+**magnitude** (deepest candidate `delta_min`; 0 at |ΔNBR| ≤ 0.1, 1 at ≥ 0.5, weight
+0.35), **persistence** (observation count; 1 look = 0, ≥ 5 = 1, weight 0.30),
+**coverage** (mean candidate valid-pixel fraction, weight 0.20), **currency** (days
+since last detection; 0 d = 1, ≥ 180 d = 0, weight 0.15). Score ≥ 0.65 → `high`,
+≥ 0.4 → `medium`, else `low`. Factors missing on pre-#95 rows are recorded as null
+and the weights renormalize — degraded, never fabricated.
+
+The pipeline assesses **all** of the AOI's events after event tracking and the
+resolved lifecycle (currency decays even without new detections), but appends a row
+only when the conclusion moved (no assessment under the current rule version, or the
+level / rounded score changed) — history captures every change of conclusion without
+a row per daily run. Radar agreement (E16) and context proximity (E17) join the same
+structure under a bumped `rule_version`.
+
 ### 5.10 Dashboard (Slice 2, E10)
 
 **`forest_sentinel.dashboard`** is a FastAPI app (`uv run uvicorn forest_sentinel.dashboard.app:app`)

@@ -435,3 +435,44 @@ def test_downgrade_removes_manual_review_table(
     command.downgrade(alembic_config, "0012_methodology_display_version")
 
     assert "manual_review" not in inspect(clean_database).get_table_names()
+
+
+def test_migrations_create_confidence_assessment_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+
+    inspector = inspect(clean_database)
+    assert "confidence_assessment" in inspector.get_table_names()
+
+    columns = {column["name"] for column in inspector.get_columns("confidence_assessment")}
+    assert {
+        "id",
+        "event_id",
+        "pipeline_run_id",
+        "level",
+        "score",
+        "inputs",
+        "rule_version",
+        "created_at",
+    } <= columns
+
+    fks = inspector.get_foreign_keys("confidence_assessment")
+    assert any(
+        fk["referred_table"] == "disturbance_event" and fk["options"].get("ondelete") == "CASCADE"
+        for fk in fks
+    )
+    checks = {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints("confidence_assessment")
+    }
+    assert "ck_confidence_assessment_level" in checks
+
+
+def test_downgrade_removes_confidence_assessment_table(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "0013_manual_review")
+
+    assert "confidence_assessment" not in inspect(clean_database).get_table_names()
