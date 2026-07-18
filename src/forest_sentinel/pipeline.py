@@ -98,6 +98,7 @@ class PipelineSummary:
     export_failures: int = 0  # observations skipped because an EE export failed
     index_rasters_reused: int = 0  # persisted by an earlier run; no export submitted
     change_rasters_reused: int = 0
+    events_resolved: int = 0  # ongoing events auto-resolved this run (quiet + clear look)
 
 
 def run_pipeline(
@@ -113,6 +114,7 @@ def run_pipeline(
     min_area_m2: float | None = None,
     scale: int = indices.DEFAULT_SCALE_METERS,
     max_concurrent_exports: int = 1,
+    resolved_after_days: int = events.DEFAULT_RESOLVED_AFTER_DAYS,
     ee_module: Any = earthengine,
 ) -> PipelineSummary:
     """Run discover → indices → change → candidates → events for one AOI and window.
@@ -149,6 +151,7 @@ def run_pipeline(
                 min_area_m2=min_area_m2,
                 scale=scale,
                 max_concurrent_exports=max_concurrent_exports,
+                resolved_after_days=resolved_after_days,
                 ee_module=ee_module,
                 recorder=recorder,
             )
@@ -179,6 +182,7 @@ def _run_pipeline_locked(
     min_area_m2: float | None,
     scale: int,
     max_concurrent_exports: int,
+    resolved_after_days: int,
     ee_module: Any,
     recorder: runlog.RunRecorder,
 ) -> PipelineSummary:
@@ -347,12 +351,18 @@ def _run_pipeline_locked(
             )
 
     tracking = events.track_events_for_aoi(session, aoi=aoi)
+    # Lifecycle after tracking: extension has already reopened any re-detected
+    # events, so what remains quiet-past-window (with a clear later look) resolves.
+    events_resolved = events.apply_resolved_lifecycle(
+        session, aoi=aoi, resolved_after_days=resolved_after_days
+    )
     recorder.record(
         "events",
         "info",
         message=(
             f"{tracking.events_created} events created, "
-            f"{tracking.observations_added} observations tracked"
+            f"{tracking.observations_added} observations tracked, "
+            f"{events_resolved} resolved"
         ),
     )
 
@@ -368,4 +378,5 @@ def _run_pipeline_locked(
         export_failures=export_failures,
         index_rasters_reused=index_reused,
         change_rasters_reused=change_reused,
+        events_resolved=events_resolved,
     )

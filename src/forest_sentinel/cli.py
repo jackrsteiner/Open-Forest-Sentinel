@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from forest_sentinel import (
     earthengine,
+    events,
     forestmask,
     indices,
     pipeline,
@@ -318,7 +319,7 @@ def _aoi_list(session: Session) -> int:
         print("No AOIs configured.")
         return 0
     print(f"{'id':>4}  {'name':<32} {'observations':>12} {'events':>7}  last run")
-    for aoi_id, name, observations, events in rows:
+    for aoi_id, name, observations, event_count in rows:
         last_run = session.execute(
             select(PipelineRun.status, PipelineRun.started_at)
             .where(PipelineRun.aoi_id == aoi_id)
@@ -326,7 +327,7 @@ def _aoi_list(session: Session) -> int:
             .limit(1)
         ).first()
         run_label = f"{last_run.status} @ {last_run.started_at:%Y-%m-%d %H:%M}" if last_run else "—"
-        print(f"{aoi_id:>4}  {name:<32} {observations:>12} {events:>7}  {run_label}")
+        print(f"{aoi_id:>4}  {name:<32} {observations:>12} {event_count:>7}  {run_label}")
     return 0
 
 
@@ -481,6 +482,11 @@ def _run_pipeline(args: argparse.Namespace) -> int:
                     threshold=threshold,
                     min_area_m2=min_area,
                     max_concurrent_exports=_max_concurrent_exports(),
+                    # Lifecycle config, not a methodology input: changing it never
+                    # mints a new methodology version.
+                    resolved_after_days=_positive_int_env(
+                        "RESOLVED_AFTER_DAYS", events.DEFAULT_RESOLVED_AFTER_DAYS
+                    ),
                 )
                 session.commit()
         except StorageConfigurationError as exc:
@@ -516,7 +522,8 @@ def _run_pipeline(args: argparse.Namespace) -> int:
     print(f"Disturbance candidates: {summary.candidates}")
     print(
         f"Disturbance events: {summary.events_created} created, "
-        f"{summary.event_observations} observations tracked"
+        f"{summary.event_observations} observations tracked, "
+        f"{summary.events_resolved} resolved"
     )
     if summary.export_failures:
         # Partial results are committed; a nonzero exit alerts the scheduler.
