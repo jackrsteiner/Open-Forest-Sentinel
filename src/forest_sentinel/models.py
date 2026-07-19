@@ -547,6 +547,11 @@ class PipelineRun(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     since: Mapped[date] = mapped_column(Date, nullable=False)
     until: Mapped[date] = mapped_column(Date, nullable=False)
+    # Hash of the AOI geometry the run scanned with (nullable: rows predating the
+    # column). AOI geometry is instance data, not a methodology input — this is
+    # the audit trail that makes a silent footprint edit visible in run history
+    # (config-inventory Finding 8).
+    aoi_geometry_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     # Final PipelineSummary counts (asdict), stamped when the run finishes.
     summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

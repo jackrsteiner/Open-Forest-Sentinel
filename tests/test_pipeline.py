@@ -762,6 +762,58 @@ def test_methodology_change_records_a_warning_event(db_session: Session, tmp_pat
     assert warning_count == 1
 
 
+def test_aoi_geometry_change_is_stamped_and_warned(db_session: Session, tmp_path: Path) -> None:
+    """Editing an AOI's footprint is instance data with methodology-sized blast
+    radius: every run stamps the geometry hash, and a changed hash records a
+    warning (config-inventory Finding 8)."""
+    from geoalchemy2.shape import from_shape
+    from shapely.geometry import MultiPolygon, Polygon
+
+    from forest_sentinel.models import PipelineRun, PipelineRunEvent
+    from tests.fakes import make_methodology
+
+    aoi = make_aoi(db_session, name="Edited AOI")
+    methodology = make_methodology(db_session)
+    fake_ee = _fake_ee((1,))
+
+    def run() -> None:
+        run_pipeline(
+            db_session,
+            aoi=aoi,
+            since=date(2026, 1, 1),
+            until=date(2026, 2, 1),
+            methodology=methodology,
+            storage=FakeStorage(tmp_path),
+            ee_module=fake_ee,
+        )
+        db_session.commit()
+
+    run()
+    run()  # unchanged geometry: stamped, but no warning
+
+    grown = MultiPolygon([Polygon([(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)])])
+    aoi.geometry = from_shape(grown, srid=4326)
+    db_session.flush()
+    run()
+
+    runs = db_session.execute(select(PipelineRun).order_by(PipelineRun.id)).scalars().all()
+    hashes = [r.aoi_geometry_hash for r in runs]
+    assert all(hashes)
+    assert hashes[0] == hashes[1] != hashes[2]
+
+    warnings = (
+        db_session.execute(select(PipelineRunEvent).where(PipelineRunEvent.outcome == "warning"))
+        .scalars()
+        .all()
+    )
+    assert len(warnings) == 1
+    assert warnings[0].run_id == runs[2].id
+    message = warnings[0].message or ""
+    assert "AOI geometry changed" in message
+    assert hashes[1] in message
+    assert hashes[2] in message
+
+
 def test_candidate_extraction_vectorizes_over_the_clipped_region(
     db_session: Session, tmp_path: Path
 ) -> None:
