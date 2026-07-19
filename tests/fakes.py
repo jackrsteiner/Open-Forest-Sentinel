@@ -239,7 +239,7 @@ def make_change_raster(
     """Insert a ChangeRaster row for the given observation."""
     change = ChangeRaster(
         observation_id=observation.id,
-        methodology_version_id=methodology.id,
+        raster_lineage_id=methodology.raster_lineage_id,
         change_type=change_type,
         cog_path=cog_path,
         baseline_window=baseline_window,

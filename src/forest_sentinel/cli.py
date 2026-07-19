@@ -65,11 +65,18 @@ from forest_sentinel.models import (
 from forest_sentinel.storage import StorageConfigurationError, StorageError
 
 # Pins what Google ran for this build, recorded in the methodology version for reproducibility.
+# Split per stage (config-inventory Finding 4): the RASTER pin invalidates raster
+# lineages (index/change COGs re-export when it bumps); the detection pin below
+# invalidates only the methodology (candidates re-extract, every COG reused).
+# The raster pins keep the pre-split values so lineages backfilled by migration
+# 0020 content-match the ones new runs derive — no re-export on upgrade.
 EE_SCRIPT_VERSION = "slice1-optical-change-v1"
+RASTER_SCRIPT_VERSION = "slice1-optical-change-v1"
 
-# The radar stage's own pin (Slice 5): radar runs under its own content-addressed
-# methodology (radar-change), so its EE code version is pinned independently.
+# The radar stage's own pins (Slice 5): radar runs under its own content-addressed
+# methodology (radar-change), so its code versions are pinned independently.
 RADAR_SCRIPT_VERSION = "slice5-radar-change-v1"
+RADAR_RASTER_SCRIPT_VERSION = "slice5-radar-change-v1"
 RADAR_ENV_VAR = "FOREST_SENTINEL_RADAR"
 RADAR_THRESHOLD_ENV_VAR = "FOREST_SENTINEL_RADAR_THRESHOLD"
 
@@ -295,7 +302,7 @@ def _run_cogs_reproduce(args: argparse.Namespace) -> int:
                         session,
                         raster=index_raster,
                         storage=cog_storage,
-                        current_script_version=EE_SCRIPT_VERSION,
+                        current_script_version=RASTER_SCRIPT_VERSION,
                         force_version=args.force_version,
                     )
                 else:
@@ -307,7 +314,7 @@ def _run_cogs_reproduce(args: argparse.Namespace) -> int:
                         session,
                         raster=change_raster,
                         storage=cog_storage,
-                        current_script_version=EE_SCRIPT_VERSION,
+                        current_script_version=RASTER_SCRIPT_VERSION,
                         force_version=args.force_version,
                     )
         except StorageConfigurationError as exc:
@@ -497,6 +504,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
         return 1
     parameters = {
         "ee_script_version": EE_SCRIPT_VERSION,
+        "raster_script_version": RASTER_SCRIPT_VERSION,
         "collections": sorted(HLS_COLLECTIONS),
         "baseline_window": args.baseline_window,
         "delta_nbr_threshold": threshold,
@@ -538,6 +546,7 @@ def _run_pipeline(args: argparse.Namespace) -> int:
                         name="radar-change",
                         parameters={
                             "ee_script_version": RADAR_SCRIPT_VERSION,
+                            "raster_script_version": RADAR_RASTER_SCRIPT_VERSION,
                             "collection": sentinel1.S1_COLLECTION,
                             "metric": "vv_db",
                             "delta_vv_db_threshold": radar_threshold,

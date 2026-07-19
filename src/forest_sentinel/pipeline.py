@@ -32,6 +32,7 @@ from forest_sentinel import (
     events,
     indices,
     radar,
+    reproduce,
     runlog,
     sentinel1,
 )
@@ -86,17 +87,17 @@ def _missing_cog_counts(
     session: Session,
     *,
     observations: list[Observation],
-    methodology_ids: list[int],
+    raster_lineage_ids: list[int],
 ) -> tuple[int, int]:
     """(missing, cataloged) counts of the window's on-disk raster files.
 
     Only rows the run could actually reuse are counted: this window's
-    observations under the run's methodology lineages. Missing files are
+    observations under the run's raster lineages. Missing files are
     re-exported per-row anyway (indices/change check per artifact); this
     preflight exists to make a *wholesale* miss loud before EE quota is spent.
     """
     observation_ids = [observation.id for observation in observations]
-    if not observation_ids or not methodology_ids:
+    if not observation_ids or not raster_lineage_ids:
         return (0, 0)
     paths: list[str] = []
     for model in (IndexRaster, ChangeRaster):
@@ -104,7 +105,7 @@ def _missing_cog_counts(
             session.execute(
                 select(model.cog_path)
                 .where(model.observation_id.in_(observation_ids))
-                .where(model.methodology_version_id.in_(methodology_ids))
+                .where(model.raster_lineage_id.in_(raster_lineage_ids))
             )
             .scalars()
             .all()
@@ -226,6 +227,49 @@ def run_pipeline(
         _release_aoi_run_lock(session, aoi.id)
 
 
+def _candidates_for_product(
+    session: Session,
+    *,
+    product: change.ChangeProduct,
+    methodology: MethodologyVersion,
+    fallback_region: Any,
+    scale: int,
+    threshold: float | None,
+    min_area_m2: float | None,
+    ee_module: Any,
+) -> int:
+    """Candidate count for one change product under the run's methodology.
+
+    A product with a live delta extracts directly. A frozen/reused product
+    (``delta_image is None``) usually already has this methodology's candidates
+    — count them. When it does not, the raster was minted under a different
+    detection layer of the same raster lineage (Finding 1): the delta is
+    rebuilt from recorded provenance and extracted with **no new export**.
+    """
+    raster = product.change_raster
+    delta_image = product.delta_image
+    region = product.region if product.region is not None else fallback_region
+    if delta_image is None:
+        if candidates.has_extraction(session, raster.id, methodology.id):
+            return candidates.count_candidates_for_change_raster(session, raster.id, methodology.id)
+        delta_image, region, _, _ = reproduce.rebuild_change_delta(
+            session, raster=raster, ee_module=ee_module
+        )
+    return len(
+        candidates.extract_candidates_for_change_raster(
+            session,
+            change_raster=raster,
+            methodology=methodology,
+            delta_image=delta_image,
+            region=region,
+            scale=scale,
+            threshold=threshold,
+            min_area_m2=min_area_m2,
+            ee_module=ee_module,
+        )
+    )
+
+
 def _run_pipeline_locked(
     session: Session,
     *,
@@ -273,11 +317,11 @@ def _run_pipeline_locked(
         .all()
     )
 
-    methodology_ids = [methodology.id] + (
-        [radar_methodology.id] if radar_methodology is not None else []
+    lineage_ids = [methodology.raster_lineage_id] + (
+        [radar_methodology.raster_lineage_id] if radar_methodology is not None else []
     )
     missing_cogs, cataloged_cogs = _missing_cog_counts(
-        session, observations=observations, methodology_ids=methodology_ids
+        session, observations=observations, raster_lineage_ids=lineage_ids
     )
     if cataloged_cogs and missing_cogs / cataloged_cogs >= _MISSING_COG_WARNING_FRACTION:
         recorder.record(
@@ -366,27 +410,17 @@ def _run_pipeline_locked(
             for product in products:
                 if product.change_type != CANDIDATE_CHANGE_TYPE:
                     continue
-                if product.delta_image is None:
-                    # Frozen or reused: the candidate set already exists (it commits
-                    # in the same checkpoint as the raster) — count it, don't
-                    # re-extract it.
-                    observation_candidates += candidates.count_candidates_for_change_raster(
-                        session, product.change_raster.id
-                    )
-                    continue
-                observation_candidates += len(
-                    candidates.extract_candidates_for_change_raster(
-                        session,
-                        change_raster=product.change_raster,
-                        delta_image=product.delta_image,
-                        # Vectorize over the same scene ∩ AOI region the delta was
-                        # exported with (#78); whole-AOI is the defensive fallback.
-                        region=product.region if product.region is not None else region,
-                        scale=scale,
-                        threshold=threshold,
-                        min_area_m2=min_area_m2,
-                        ee_module=ee_module,
-                    )
+                # Vectorize over the same scene ∩ AOI region the delta was
+                # exported with (#78); whole-AOI is the defensive fallback.
+                observation_candidates += _candidates_for_product(
+                    session,
+                    product=product,
+                    methodology=methodology,
+                    fallback_region=region,
+                    scale=scale,
+                    threshold=threshold,
+                    min_area_m2=min_area_m2,
+                    ee_module=ee_module,
                 )
             change_count += len(products)
             observation_reused = sum(1 for product in products if product.reused)
@@ -568,22 +602,15 @@ def _run_radar_stage(
             )
             observation_candidates = 0
             for product in products:
-                if product.delta_image is None:
-                    observation_candidates += candidates.count_candidates_for_change_raster(
-                        session, product.change_raster.id
-                    )
-                    continue
-                observation_candidates += len(
-                    candidates.extract_candidates_for_change_raster(
-                        session,
-                        change_raster=product.change_raster,
-                        delta_image=product.delta_image,
-                        region=product.region,
-                        scale=scale,
-                        threshold=threshold,
-                        min_area_m2=min_area,
-                        ee_module=ee_module,
-                    )
+                observation_candidates += _candidates_for_product(
+                    session,
+                    product=product,
+                    methodology=methodology,
+                    fallback_region=mapping(to_shape(aoi.geometry)),
+                    scale=scale,
+                    threshold=threshold,
+                    min_area_m2=min_area,
+                    ee_module=ee_module,
                 )
             delta_count += len(products)
             reused_count += sum(1 for product in products if product.reused)

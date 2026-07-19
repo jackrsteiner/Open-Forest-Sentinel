@@ -124,11 +124,12 @@ def test_migrations_create_index_raster_table(
     assert {
         "id",
         "observation_id",
-        "methodology_version_id",
+        "raster_lineage_id",
         "index_type",
         "cog_path",
         "valid_pixel_fraction",
     } <= columns
+    assert "methodology_version_id" not in columns
 
 
 def test_downgrade_removes_index_raster_table(
@@ -153,12 +154,13 @@ def test_migrations_create_change_raster_tables(
     assert {
         "id",
         "observation_id",
-        "methodology_version_id",
+        "raster_lineage_id",
         "change_type",
         "cog_path",
         "baseline_window",
         "valid_pixel_fraction",
     } <= columns
+    assert "methodology_version_id" not in columns
 
 
 def test_downgrade_removes_change_raster_tables(
@@ -586,3 +588,91 @@ def test_downgrade_removes_event_context_table(
     command.downgrade(alembic_config, "0017_context_layers")
 
     assert "event_context" not in inspect(clean_database).get_table_names()
+
+
+def test_migration_0020_backfills_lineages_and_repoints_rasters(
+    alembic_config: Config, clean_database: Engine
+) -> None:
+    """0020 derives each methodology's raster lineage from its stored parameters
+    (pre-split ee_script_version doubling as the raster pin), repoints rasters,
+    and backfills extraction markers — existing artifacts stay reusable."""
+    from sqlalchemy import text
+
+    from forest_sentinel.methodology import auto_version, raster_parameters
+
+    command.upgrade(alembic_config, "0019_run_aoi_geometry_hash")
+    parameters = (
+        '{"ee_script_version": "slice1-optical-change-v1", "scale_m": 30, '
+        '"baseline_window": 5, "delta_nbr_threshold": -0.25}'
+    )
+    with clean_database.connect() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO aoi (name, geometry) VALUES ('A', "
+                "ST_GeomFromText('MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)))', 4326))"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO observation (aoi_id, sensor, acquired_at, source_scene_id) "
+                "VALUES (1, 'HLSL30', '2026-01-06T00:00:00Z', 'scene-6')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO methodology_version (name, version, parameters) "
+                "VALUES ('optical-change', '1.0.0', CAST(:p AS jsonb))"
+            ),
+            {"p": parameters},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO index_raster (observation_id, methodology_version_id, "
+                "index_type, cog_path) VALUES (1, 1, 'NBR', '/cogs/nbr.tif')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO change_raster (observation_id, methodology_version_id, "
+                "change_type, cog_path, baseline_window) "
+                "VALUES (1, 1, 'delta_nbr', '/cogs/delta.tif', 5)"
+            )
+        )
+        connection.commit()
+
+    command.upgrade(alembic_config, "head")
+
+    with clean_database.connect() as connection:
+        lineage = connection.execute(
+            text("SELECT id, name, version, parameters FROM raster_lineage")
+        ).one()
+        methodology_lineage = connection.execute(
+            text("SELECT raster_lineage_id FROM methodology_version WHERE id = 1")
+        ).scalar_one()
+        index_lineage = connection.execute(
+            text("SELECT raster_lineage_id FROM index_raster WHERE id = 1")
+        ).scalar_one()
+        change_lineage = connection.execute(
+            text("SELECT raster_lineage_id FROM change_raster WHERE id = 1")
+        ).scalar_one()
+        markers = connection.execute(
+            text("SELECT change_raster_id, methodology_version_id FROM candidate_extraction")
+        ).all()
+
+    assert methodology_lineage == index_lineage == change_lineage == lineage[0]
+    assert lineage[1] == "optical-change"
+    # The migration's frozen derivation must content-match the live code's, so
+    # rasters minted before the split stay reusable after it.
+    expected_subset = raster_parameters(
+        {
+            "ee_script_version": "slice1-optical-change-v1",
+            "scale_m": 30,
+            "baseline_window": 5,
+            "delta_nbr_threshold": -0.25,
+        }
+    )
+    assert lineage[3] == expected_subset
+    assert lineage[2] == auto_version(expected_subset)
+    # Pre-split extraction invariant carried over: raster 1 was extracted by
+    # methodology 1.
+    assert [tuple(marker) for marker in markers] == [(1, 1)]

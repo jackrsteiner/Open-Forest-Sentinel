@@ -12,7 +12,7 @@ from typing import Any
 
 from geoalchemy2.shape import to_shape
 from shapely.geometry import mapping
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forest_sentinel.models import (
@@ -346,6 +346,77 @@ def test_missing_cog_triggers_exactly_one_reexport(db_session: Session, tmp_path
     assert len(second_storage.exports) == 1
     assert second.index_rasters == 1
     assert second_storage.exports[0][1].product == "NBR"
+
+
+def test_detection_change_reuses_every_raster_and_reextracts(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """Finding 1 payoff: a changed detection parameter (threshold) shares the
+    raster lineage, so a rerun reuses every COG with ZERO exports and only
+    re-extracts candidates from deltas rebuilt out of recorded provenance."""
+    from forest_sentinel.models import DisturbanceCandidate
+    from tests.fakes import make_methodology
+
+    aoi = make_aoi(db_session, name="Lineage AOI")
+    strict = make_methodology(
+        db_session, version="auto-strict", parameters={"delta_nbr_threshold": -0.25}
+    )
+    loose = make_methodology(
+        db_session, version="auto-loose", parameters={"delta_nbr_threshold": -0.15}
+    )
+    assert strict.raster_lineage_id == loose.raster_lineage_id  # detection-only diff
+    fake_ee = _fake_ee((1, 2, 3))
+
+    def run(methodology: Any, storage: FakeStorage) -> Any:
+        summary = run_pipeline(
+            db_session,
+            aoi=aoi,
+            since=date(2026, 1, 1),
+            until=date(2026, 2, 1),
+            methodology=methodology,
+            storage=storage,
+            ee_module=fake_ee,
+        )
+        db_session.commit()
+        return summary
+
+    first_storage = FakeStorage(tmp_path)
+    run(strict, first_storage)
+    assert len(first_storage.exports) > 0
+    raster_rows = db_session.execute(select(IndexRaster)).scalars().all()
+    change_rows = db_session.execute(select(ChangeRaster)).scalars().all()
+
+    second_storage = FakeStorage(tmp_path)
+    vectorize_calls_before = len(fake_ee.calls)
+    summary = run(loose, second_storage)
+
+    # Every raster reused or frozen — the whole point: zero exports for a
+    # threshold change. (The ΔNBR rasters are frozen — their strict-layer
+    # candidates are event history — and the ΔNDVI ones count as reused.)
+    assert second_storage.exports == []
+    assert summary.index_rasters == 0
+    assert summary.change_rasters_reused > 0
+    assert len(db_session.execute(select(IndexRaster)).scalars().all()) == len(raster_rows)
+    assert len(db_session.execute(select(ChangeRaster)).scalars().all()) == len(change_rows)
+    # ...but the new detection layer extracted its own candidate set.
+    assert len(fake_ee.calls) > vectorize_calls_before
+    by_methodology = {
+        methodology_id: count
+        for methodology_id, count in db_session.execute(
+            select(
+                DisturbanceCandidate.methodology_version_id,
+                func.count(DisturbanceCandidate.id),
+            ).group_by(DisturbanceCandidate.methodology_version_id)
+        ).all()
+    }
+    assert by_methodology.get(strict.id, 0) > 0
+    assert by_methodology.get(loose.id, 0) > 0
+
+    # A third run under the same methodology finds the extraction markers and
+    # does not rebuild or re-vectorize anything.
+    calls_after_second = len(fake_ee.calls)
+    run(loose, FakeStorage(tmp_path))
+    assert len(fake_ee.calls) == calls_after_second
 
 
 def test_wholesale_missing_cogs_record_a_preflight_warning(
@@ -797,7 +868,7 @@ def test_aoi_geometry_change_is_stamped_and_warned(db_session: Session, tmp_path
     run()
 
     runs = db_session.execute(select(PipelineRun).order_by(PipelineRun.id)).scalars().all()
-    hashes = [r.aoi_geometry_hash for r in runs]
+    hashes = [r.aoi_geometry_hash or "" for r in runs]
     assert all(hashes)
     assert hashes[0] == hashes[1] != hashes[2]
 

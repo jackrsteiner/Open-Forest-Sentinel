@@ -121,12 +121,41 @@ class Observation(Base):
     )
 
 
+class RasterLineage(Base):
+    """Content-addressed provenance for the *raster* half of a methodology.
+
+    The parameters that shape exported raster content (script pin, source
+    collections, scale, masked categories, baseline window) hash separately
+    from the detection parameters (threshold, min area, forest mask), and
+    index/change rasters key on this lineage instead of the full methodology —
+    so a detection-parameter change reuses every COG and only re-runs candidate
+    extraction (config-inventory Finding 1). Like ``methodology_version``,
+    ``version`` is ``auto-<hash>`` of the canonical parameters and rows are
+    append-only.
+    """
+
+    __tablename__ = "raster_lineage"
+    __table_args__ = (UniqueConstraint("name", "version", name="uq_raster_lineage_name_version"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[str] = mapped_column(String, nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class MethodologyVersion(Base):
     """Provenance for a processing/detection method.
 
     ``parameters`` captures the detection/processing parameters plus the Earth
     Engine script version and input collection/asset IDs, so a run is
-    reproducible against Google's compute.
+    reproducible against Google's compute. ``raster_lineage_id`` references the
+    content-addressed raster half of those parameters (see ``RasterLineage``);
+    it is derived from ``parameters``, never independently chosen.
     """
 
     __tablename__ = "methodology_version"
@@ -143,6 +172,10 @@ class MethodologyVersion(Base):
     # the EE script version changes, patch-bumped for parameter tweaks.
     display_version: Mapped[str | None] = mapped_column(String, nullable=True)
     parameters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    raster_lineage_id: Mapped[int] = mapped_column(
+        ForeignKey("raster_lineage.id", name="fk_methodology_version_raster_lineage"),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -151,23 +184,25 @@ class MethodologyVersion(Base):
 
 
 class IndexRaster(Base):
-    """A derived NBR or NDVI raster for one observation, stored as a COG."""
+    """A derived NBR or NDVI raster for one observation, stored as a COG.
+
+    Keyed on the raster lineage, not the full methodology: detection-parameter
+    changes (threshold, min area, forest mask) share these rows and files.
+    """
 
     __tablename__ = "index_raster"
     __table_args__ = (
         UniqueConstraint(
             "observation_id",
             "index_type",
-            "methodology_version_id",
+            "raster_lineage_id",
             name="uq_index_raster_identity",
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     observation_id: Mapped[int] = mapped_column(ForeignKey("observation.id"), nullable=False)
-    methodology_version_id: Mapped[int] = mapped_column(
-        ForeignKey("methodology_version.id"), nullable=False
-    )
+    raster_lineage_id: Mapped[int] = mapped_column(ForeignKey("raster_lineage.id"), nullable=False)
     index_type: Mapped[str] = mapped_column(String, nullable=False)
     cog_path: Mapped[str] = mapped_column(String, nullable=False)
     valid_pixel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -179,23 +214,26 @@ class IndexRaster(Base):
 
 
 class ChangeRaster(Base):
-    """A ΔNBR/ΔNDVI change product: current index minus the trailing-median baseline."""
+    """A ΔNBR/ΔNDVI change product: current index minus the trailing-median baseline.
+
+    Keyed on the raster lineage, not the full methodology: detection-parameter
+    changes (threshold, min area, forest mask) share these rows and files, and
+    each detection layer extracts its own candidate set from them.
+    """
 
     __tablename__ = "change_raster"
     __table_args__ = (
         UniqueConstraint(
             "observation_id",
             "change_type",
-            "methodology_version_id",
+            "raster_lineage_id",
             name="uq_change_raster_identity",
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     observation_id: Mapped[int] = mapped_column(ForeignKey("observation.id"), nullable=False)
-    methodology_version_id: Mapped[int] = mapped_column(
-        ForeignKey("methodology_version.id"), nullable=False
-    )
+    raster_lineage_id: Mapped[int] = mapped_column(ForeignKey("raster_lineage.id"), nullable=False)
     change_type: Mapped[str] = mapped_column(String, nullable=False)
     cog_path: Mapped[str] = mapped_column(String, nullable=False)
     baseline_window: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -250,6 +288,40 @@ class DisturbanceCandidate(Base):
     delta_min: Mapped[float | None] = mapped_column(Float, nullable=True)
     valid_pixel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class CandidateExtraction(Base):
+    """Marker: this methodology has extracted candidates from this raster.
+
+    Change rasters are shared across detection layers (Finding 1), so "does the
+    current methodology have candidates here?" cannot be answered by counting
+    ``disturbance_candidate`` rows — an extraction can legitimately yield zero.
+    One row per ``(change_raster, methodology)`` extraction; the pipeline
+    rebuilds and re-extracts only when the marker is absent.
+    """
+
+    __tablename__ = "candidate_extraction"
+    __table_args__ = (
+        UniqueConstraint(
+            "change_raster_id",
+            "methodology_version_id",
+            name="uq_candidate_extraction_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    change_raster_id: Mapped[int] = mapped_column(
+        ForeignKey("change_raster.id", ondelete="CASCADE"), nullable=False
+    )
+    methodology_version_id: Mapped[int] = mapped_column(
+        ForeignKey("methodology_version.id", name="fk_candidate_extraction_methodology"),
+        nullable=False,
+    )
+    extracted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),

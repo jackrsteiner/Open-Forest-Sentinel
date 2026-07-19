@@ -74,7 +74,7 @@ def compute_radar_change_for_observation(
         select(ChangeRaster)
         .where(ChangeRaster.observation_id == observation.id)
         .where(ChangeRaster.change_type == RADAR_CHANGE_TYPE)
-        .where(ChangeRaster.methodology_version_id == methodology.id)
+        .where(ChangeRaster.raster_lineage_id == methodology.raster_lineage_id)
     ).scalar_one_or_none()
     # Frozen: event evidence, never recomputed (matching change.py).
     if existing is not None and change_raster_is_frozen(session, existing.id):
@@ -139,7 +139,7 @@ def compute_radar_change_for_observation(
     else:
         raster = ChangeRaster(
             observation_id=observation.id,
-            methodology_version_id=methodology.id,
+            raster_lineage_id=methodology.raster_lineage_id,
             change_type=RADAR_CHANGE_TYPE,
             cog_path=str(cog_path),
             baseline_window=baseline_window,
