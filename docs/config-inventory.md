@@ -167,7 +167,12 @@ cheap stage. See Findings 1–4.
   DB rows (`retention.py:63-96`). A pruned raster needed later is re-exported from recorded
   provenance (`reproduce.py`), and re-downloading doesn't reset its retention clock. Those
   re-exports are a deliberate, documented storage-for-compute trade — "redundant" only if
-  retention is set shorter than the instance's actual re-access pattern.
+  retention is set shorter than the instance's actual re-access pattern. Sizing note: at a
+  Solomon Islands scale (~200–300 observations/month, each with 2 index COGs and up to 2
+  change COGs), 90 days of retention can plausibly approach the reference VM's 30 GB disk
+  before compute is ever a concern — check `COG_RETENTION_DAYS` against disk size first
+  when scaling the AOI, especially if local extraction (Finding 2) makes on-disk COGs
+  load-bearing.
 - **`RESOLVED_AFTER_DAYS`** changes when an event auto-resolves — an *interpretation* of
   detections, not a detection itself, and the code explicitly excludes it from methodology
   (`cli.py:583-587`). That is defensible, but note it does change recorded event *status*
@@ -211,6 +216,25 @@ polygonizing it locally (rasterio/shapely) would make detection-layer changes **
 subject to the COG still being on disk (retention interplay: a pruned COG would first need
 one `cogs reproduce` export). This also decouples re-extraction from EE quota and latency.
 
+**Cost on the reference VM** (e2-micro: 2 burstable vCPUs, 1 GB RAM, 30 GB `pd-standard`),
+sized for an AOI at Solomon Islands scale (~28,900 km² of land ≈ 32 M pixels at 30 m;
+~200–300 observations per 30-day window across ~20–30 HLS tiles): the compute itself is
+light. Per change raster it is one elementwise `delta < threshold` compare, one polygonize
+of a *sparse* mask (cost scales with shape count, not raster size), and zonal stats — with
+windowed reads (e.g. 512×512 blocks) peak memory is a few MB per raster, comfortably inside
+what Postgres and the dashboard leave free, and CPU is seconds per scene. The binding
+constraint is the disk: a 30 GB `pd-standard` volume sustains only single-digit MB/s, so a
+full-window re-extraction after a threshold change (reading every change COG, likely a few
+hundred MB to ~1 GB compressed) is I/O-dominated — tens of minutes to about an hour. That
+still strictly beats the status quo, where the same change re-exports the window from EE at
+up to an hour per export (`storage.py:29`), four in flight, inside the 20 h pipeline budget;
+and it is a rare, operator-initiated batch, not the daily hot path (incremental runs add
+seconds per new scene). Two implementation caveats: reads must be windowed — whole-array
+loads of a 13.4 M-pixel tile (~54 MB as float32, several at once) would not survive 1 GB of
+RAM alongside Postgres; and the forest mask, today applied from the EE asset at
+vectorization time, would need a one-time local COG export per (asset, canopy %) per AOI —
+static and reusable, but a new artifact type.
+
 ### 3. `baseline_window` experiments could reuse index COGs — and even skip EE entirely
 
 Index rasters don't depend on `baseline_window`; under the layered model of Finding 1 they
@@ -219,6 +243,14 @@ further: since per-scene index COGs are retained, ΔNBR could be computed locall
 (current − median of recorded priors) with no EE at all. Caveats: grid alignment and
 valid-pixel masking must be reimplemented locally, and radar has no per-scene index COGs
 (only deltas are exported), so this applies to the optical lineage only.
+
+Unlike Finding 2, this half is **not** recommended for the reference VM: it reads the
+current plus all `baseline_window` prior index COGs per observation (~6× Finding 2's I/O)
+plus a per-pixel median, turning a full-window rebuild into several hours of `pd-standard`
+disk time at Solomon Islands scale — feasible inside the 20 h budget, but a much weaker
+cost/benefit than Finding 2, on top of the alignment/masking caveats above. The layered
+methodology of Finding 1 already removes the *redundant* index re-exports; baseline
+compositing itself is best left in EE.
 
 ### 4. `EE_SCRIPT_VERSION` is a coarse invalidation pin
 
