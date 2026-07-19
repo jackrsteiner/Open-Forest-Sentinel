@@ -348,6 +348,53 @@ def test_missing_cog_triggers_exactly_one_reexport(db_session: Session, tmp_path
     assert second_storage.exports[0][1].product == "NBR"
 
 
+def test_wholesale_missing_cogs_record_a_preflight_warning(
+    db_session: Session, tmp_path: Path
+) -> None:
+    """Most of the window's cataloged COGs gone (moved COG root, repointed DB)
+    warns before EE quota is spent (Finding 5); routine single-file loss doesn't."""
+    from forest_sentinel.models import PipelineRunEvent
+
+    aoi = make_aoi(db_session, name="Preflight AOI")
+    methodology = make_methodology(db_session)
+    fake_ee = _fake_ee((1, 2, 3))
+
+    def run() -> None:
+        run_pipeline(
+            db_session,
+            aoi=aoi,
+            since=date(2026, 1, 1),
+            until=date(2026, 2, 1),
+            methodology=methodology,
+            storage=FakeStorage(tmp_path),
+            ee_module=fake_ee,
+        )
+        db_session.commit()
+
+    def preflight_warnings() -> list[str]:
+        events = db_session.execute(
+            select(PipelineRunEvent).where(PipelineRunEvent.outcome == "warning")
+        ).scalars()
+        messages = [event.message or "" for event in events]
+        return [message for message in messages if "missing on disk" in message]
+
+    run()
+
+    # One lost file is routine self-healing (#77), below the warning fraction.
+    row = db_session.execute(select(IndexRaster).limit(1)).scalars().one()
+    Path(row.cog_path).unlink()
+    run()
+    assert preflight_warnings() == []
+
+    # The whole store vanishing is a footgun, not churn: warn loudly.
+    for path in tmp_path.rglob("*.tif"):
+        path.unlink()
+    run()
+    (message,) = preflight_warnings()
+    assert "FOREST_SENTINEL_COG_ROOT" in message
+    assert "re-exported" in message
+
+
 def test_interrupted_run_keeps_checkpointed_progress(db_session: Session, tmp_path: Path) -> None:
     """Progress commits per chunk (#77): a run killed partway (systemd timeout,
     SIGTERM) leaves the completed observations' artifacts in the catalog."""

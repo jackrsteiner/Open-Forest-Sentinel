@@ -15,6 +15,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time
+from pathlib import Path
 from typing import Any
 
 from geoalchemy2.shape import to_shape
@@ -36,7 +37,7 @@ from forest_sentinel import (
 )
 from forest_sentinel.earthengine import EarthEngineError
 from forest_sentinel.hls import discover_observations
-from forest_sentinel.models import Aoi, MethodologyVersion, Observation
+from forest_sentinel.models import Aoi, ChangeRaster, IndexRaster, MethodologyVersion, Observation
 from forest_sentinel.storage import Storage, StorageError
 
 logger = logging.getLogger(__name__)
@@ -71,9 +72,45 @@ def _release_aoi_run_lock(session: Session, aoi_id: int) -> None:
 # NBR + NDVI per observation.
 _EXPORTS_PER_OBSERVATION = 2
 
+# A majority of the window's cataloged COGs missing on disk points at a moved
+# FOREST_SENTINEL_COG_ROOT or a repointed database — not routine churn — and the
+# run is about to silently re-export all of them (config-inventory Finding 5).
+_MISSING_COG_WARNING_FRACTION = 0.5
+
 
 def _chunked(items: list[Observation], size: int) -> list[list[Observation]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _missing_cog_counts(
+    session: Session,
+    *,
+    observations: list[Observation],
+    methodology_ids: list[int],
+) -> tuple[int, int]:
+    """(missing, cataloged) counts of the window's on-disk raster files.
+
+    Only rows the run could actually reuse are counted: this window's
+    observations under the run's methodology lineages. Missing files are
+    re-exported per-row anyway (indices/change check per artifact); this
+    preflight exists to make a *wholesale* miss loud before EE quota is spent.
+    """
+    observation_ids = [observation.id for observation in observations]
+    if not observation_ids or not methodology_ids:
+        return (0, 0)
+    paths: list[str] = []
+    for model in (IndexRaster, ChangeRaster):
+        paths.extend(
+            session.execute(
+                select(model.cog_path)
+                .where(model.observation_id.in_(observation_ids))
+                .where(model.methodology_version_id.in_(methodology_ids))
+            )
+            .scalars()
+            .all()
+        )
+    missing = sum(1 for path in paths if not Path(path).exists())
+    return (missing, len(paths))
 
 
 def _submit_event(
@@ -235,6 +272,24 @@ def _run_pipeline_locked(
         .scalars()
         .all()
     )
+
+    methodology_ids = [methodology.id] + (
+        [radar_methodology.id] if radar_methodology is not None else []
+    )
+    missing_cogs, cataloged_cogs = _missing_cog_counts(
+        session, observations=observations, methodology_ids=methodology_ids
+    )
+    if cataloged_cogs and missing_cogs / cataloged_cogs >= _MISSING_COG_WARNING_FRACTION:
+        recorder.record(
+            "run",
+            "warning",
+            message=(
+                f"{missing_cogs} of {cataloged_cogs} cataloged COGs for this window are "
+                "missing on disk (moved FOREST_SENTINEL_COG_ROOT? database repointed? "
+                "over-aggressive prune?) — reuse will miss and they will be re-exported "
+                "from Earth Engine"
+            ),
+        )
 
     # One bad export must not starve the run: failing observations are skipped and
     # counted; already-persisted rows for them are consistent (upserts) and the next
