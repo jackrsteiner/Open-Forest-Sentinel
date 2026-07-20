@@ -110,7 +110,8 @@
       }
       .run-event-failed { color: #c0392b; }
       .run-event-warning { color: #e67e22; }
-      /* Map controls (#145): basemap toggle button + click-to-copy toast. */
+      /* Map controls (#145/#153): basemap buttons + click-to-copy toast. */
+      .basemap-switcher { display: flex; gap: 4px; }
       .basemap-toggle {
         font: inherit; font-size: 12px; padding: 4px 8px; cursor: pointer;
         background: #fff; border: 2px solid rgba(0, 0, 0, 0.25); border-radius: 4px;
@@ -293,29 +294,36 @@
       let activeBase = "streets";
       baseLayers[activeBase].layer.addTo(map);
 
-      const BasemapToggle = L.Control.extend({
+      // One button per NOT-displayed basemap (#153): any of the three layers
+      // is a single click away, instead of cycling through the wrong one.
+      const BasemapSwitcher = L.Control.extend({
         options: { position: "topleft" },
         onAdd() {
-          const button = L.DomUtil.create("button", "basemap-toggle");
-          button.type = "button";
-          button.title =
-            "Switch base map: Streets → Satellite (high-res, static) → Daily satellite (NASA GIBS, updated daily)";
-          const nextBase = () =>
-            baseOrder[(baseOrder.indexOf(activeBase) + 1) % baseOrder.length];
-          button.textContent = baseLayers[nextBase()].label; // labels the layer you'd switch TO
-          // A control click must not fall through to the map (and copy coords).
-          L.DomEvent.disableClickPropagation(button);
-          L.DomEvent.on(button, "click", () => {
-            const next = nextBase();
-            map.removeLayer(baseLayers[activeBase].layer);
-            baseLayers[next].layer.addTo(map);
-            activeBase = next;
-            button.textContent = baseLayers[nextBase()].label;
-          });
-          return button;
+          const box = L.DomUtil.create("div", "basemap-switcher");
+          // Control clicks must not fall through to the map (and copy coords).
+          L.DomEvent.disableClickPropagation(box);
+          const render = () => {
+            box.textContent = "";
+            baseOrder
+              .filter((key) => key !== activeBase)
+              .forEach((key) => {
+                const button = L.DomUtil.create("button", "basemap-toggle", box);
+                button.type = "button";
+                button.textContent = baseLayers[key].label;
+                button.title = `Switch base map to ${baseLayers[key].label}`;
+                L.DomEvent.on(button, "click", () => {
+                  map.removeLayer(baseLayers[activeBase].layer);
+                  baseLayers[key].layer.addTo(map);
+                  activeBase = key;
+                  render();
+                });
+              });
+          };
+          render();
+          return box;
         },
       });
-      map.addControl(new BasemapToggle());
+      map.addControl(new BasemapSwitcher());
 
       // Click-to-copy coordinates (#145). Also fires when a click opens a
       // feature popup — harmless, the clicked point is still what's copied.
