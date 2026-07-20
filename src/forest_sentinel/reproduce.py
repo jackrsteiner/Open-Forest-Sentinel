@@ -42,8 +42,8 @@ from forest_sentinel.storage import CogKey, Storage
 logger = logging.getLogger(__name__)
 
 # Rasters key on the raster lineage (Finding 1); its pin is the raster-stage
-# script version (Finding 4). Lineages backfilled from pre-split rows carry the
-# old ee_script_version value under this key (migration 0020).
+# script version (Finding 4). Lineages derived from parameter sets that predate
+# the split carry the old ee_script_version value under this key.
 _SCRIPT_VERSION_PARAM = "raster_script_version"
 _SCALE_PARAM = "scale_m"
 _RADAR_CHANGE_TYPE = "delta_vv_db"
