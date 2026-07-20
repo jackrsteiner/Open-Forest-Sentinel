@@ -61,6 +61,9 @@
       }
       #add-context input, #add-context select { margin: 2px 0; font-size: 12px; }
       body.context-uploads-disabled #add-context { display: none; }
+      /* AOI mutations (#149): uploads and the disable toggle share one guard. */
+      body.aoi-uploads-disabled #add-aoi, body.aoi-uploads-disabled #aoi-toggle { display: none; }
+      #aoi-toggle { font-size: 11px; padding: 2px 6px; margin-left: 4px; }
       .conf-explain { font-size: 12px; color: #555; margin: 2px 0 2px 12px; }
       .conf-history { font-size: 12px; color: #888; margin: 2px 0 2px 12px; }
       #event-filters { margin: 8px 0 2px; font-size: 12px; }
@@ -122,6 +125,7 @@
     <div id="sidebar">
       <h1>Open Forest Sentinel</h1>
       <label>AOI: <select id="aoi-select"></select></label>
+      <button id="aoi-toggle" hidden></button>
       <div id="summary" class="muted"></div>
       <div id="pipeline-controls">
         <button id="run-now">Run pipeline now</button>
@@ -366,18 +370,60 @@
       let runsRenderKey = null;
       const methodologyOpen = {};
 
-      async function loadAois() {
+      const aoisById = {};
+      async function loadAois(preferredId) {
         const aois = await (await fetch("/api/aois")).json();
         const select = document.getElementById("aoi-select");
         select.innerHTML = "";
         aois.forEach((aoi) => {
           aoiBboxById[aoi.id] = aoi.bbox;
+          aoisById[aoi.id] = aoi;
           const option = document.createElement("option");
           option.value = aoi.id;
-          option.textContent = `${aoi.name} (${aoi.event_count} events)`;
+          option.textContent =
+            `${aoi.name} (${aoi.event_count} events)` + (aoi.enabled ? "" : " — disabled");
           select.appendChild(option);
         });
-        if (aois.length) loadEvents(aois[0].id);
+        if (!aois.length) return;
+        // Keep the current selection across a toggle-triggered reload.
+        const selected = aois.some((aoi) => String(aoi.id) === String(preferredId))
+          ? preferredId
+          : aois[0].id;
+        select.value = selected;
+        updateAoiToggle();
+        loadEvents(selected);
+      }
+
+      // Disable/re-enable the selected AOI for future pipeline runs (#149).
+      // History stays browsable — only the run loop skips it. The button is
+      // hidden for AOIs with no file to mark (the primary AOI) and, via the
+      // aoi-uploads-disabled body class, on world-open dashboards.
+      function updateAoiToggle() {
+        const button = document.getElementById("aoi-toggle");
+        const aoi = aoisById[document.getElementById("aoi-select").value];
+        button.hidden = !aoi || !aoi.can_disable;
+        if (aoi) button.textContent = aoi.enabled ? "Disable AOI" : "Enable AOI";
+        button.title = aoi && aoi.enabled
+          ? "Skip this AOI on future pipeline runs (events stay visible)"
+          : "Include this AOI in future pipeline runs again";
+      }
+
+      async function toggleAoiEnabled() {
+        const select = document.getElementById("aoi-select");
+        const aoi = aoisById[select.value];
+        if (!aoi || !aoi.can_disable) return;
+        const response = await fetch(`/api/aois/${aoi.id}/enabled`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: !aoi.enabled }),
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          document.getElementById("summary").textContent =
+            body.detail || `Toggle failed (HTTP ${response.status})`;
+          return;
+        }
+        await loadAois(select.value);
       }
 
       // Zoom to the selected AOI: [min_lon, min_lat, max_lon, max_lat] → Leaflet's
@@ -1371,6 +1417,7 @@
       async function loadCapabilities() {
         try {
           const caps = await (await fetch("/api/capabilities")).json();
+          document.body.classList.toggle("aoi-uploads-disabled", !caps.aoi_uploads);
           document.body.classList.toggle("reviews-disabled", !caps.reviews);
           document.body.classList.toggle("context-uploads-disabled", !caps.context_uploads);
           document.body.classList.toggle("settings-edit-disabled", !caps.settings_edit);
@@ -1387,9 +1434,11 @@
       document.getElementById("filter-basis").addEventListener("change", renderEvents);
       document.getElementById("aoi-upload").addEventListener("click", uploadAoi);
       document.getElementById("context-upload").addEventListener("click", uploadContextLayer);
-      document.getElementById("aoi-select").addEventListener("change", (e) =>
-        loadEvents(e.target.value),
-      );
+      document.getElementById("aoi-toggle").addEventListener("click", toggleAoiEnabled);
+      document.getElementById("aoi-select").addEventListener("change", (e) => {
+        updateAoiToggle();
+        loadEvents(e.target.value);
+      });
       // Only the runs panel refreshes itself: it is the live view of an executing
       // run, while events/map stay event-driven off the selector and clicks.
       setInterval(() => {
