@@ -48,6 +48,20 @@ EDITABLE = "editable"
 GUARDED = "guarded"  # editable, but only with an explicit consequence confirmation
 DISPLAY_ONLY = "display-only"
 
+# When an edit takes effect: most knobs on the next pipeline run; a few are
+# rendered into systemd units and need an Update-instance run to roll out
+# (bead 7.5) — the dispatch sync then fires with update_vm so the rollout is
+# automatic when configured.
+APPLIES_NEXT_RUN = "next-run"
+APPLIES_UPDATE_INSTANCE = "update-instance"
+
+
+# Space-free systemd calendar forms only: the value crosses a shell-sourced
+# env file and a sed rendering, and the generated .env is also consumed by
+# docker --env-file — no quoting convention survives all three, so full
+# OnCalendar expressions with date parts stay a hand edit (bead 7.5, #139).
+_SCHEDULE_PATTERN = r"[A-Za-z]+|\d{1,2}:\d{2}(:\d{2})?"
+
 
 class SettingsError(ValueError):
     """A rejected settings write (unknown key, bad value, missing confirmation)."""
@@ -78,6 +92,12 @@ class Setting:
     minimum: float | None = None
     maximum: float | None = None
     redact: bool = False
+    # Regex a str-typed value must fullmatch. Doubles as injection defense:
+    # values reach shell-sourced env files and a unit-rendering sed, so
+    # patterns must never admit whitespace, quotes, or '#'.
+    pattern: str | None = None
+    # When the edit takes effect (APPLIES_NEXT_RUN / APPLIES_UPDATE_INSTANCE).
+    applies: str = APPLIES_NEXT_RUN
     # For methodology keys: the parameter name recorded in methodology_version
     # rows, so the catalogue can show what the current lineage actually used.
     methodology_parameter: str | None = None
@@ -184,10 +204,45 @@ def _registry() -> tuple[Setting, ...]:
             category=CATEGORY_PIPELINE,
             purpose="systemd budget for one pipeline run (TimeoutStartSec).",
             implications=(
-                "Baked into the unit by vm_setup.sh from instance.env; editing requires an "
-                "Update-instance run, so it is display-only here."
+                "Rendered into the systemd unit; rolls out on the next Update-instance "
+                "run (requested automatically when the repo sync is configured). "
+                "A single systemd time span like 20h, 90min, or 86400s."
             ),
+            editability=EDITABLE,
             default="20h",
+            pattern=r"\d+(s|min|h|d)",
+            applies=APPLIES_UPDATE_INSTANCE,
+        ),
+        Setting(
+            key="PIPELINE_SCHEDULE",
+            category=CATEGORY_PIPELINE,
+            purpose="When the daily pipeline timer fires (UTC).",
+            implications=(
+                "Rendered into the systemd timer; rolls out on the next Update-instance "
+                "run (requested automatically when the repo sync is configured). A time "
+                "of day (HH:MM[:SS], runs daily) or a systemd shorthand like hourly or "
+                "daily; expressions with date parts need a hand edit of the timer "
+                "template."
+            ),
+            editability=EDITABLE,
+            default="03:00:00",
+            pattern=_SCHEDULE_PATTERN,
+            applies=APPLIES_UPDATE_INSTANCE,
+        ),
+        Setting(
+            key="PRUNE_SCHEDULE",
+            category=CATEGORY_PIPELINE,
+            purpose="When the daily COG-retention prune timer fires (UTC).",
+            implications=(
+                "Rendered into the systemd timer; rolls out on the next Update-instance "
+                "run (requested automatically when the repo sync is configured). Keep it "
+                "before the pipeline schedule so disk headroom is reclaimed first. Same "
+                "accepted forms as PIPELINE_SCHEDULE."
+            ),
+            editability=EDITABLE,
+            default="02:30:00",
+            pattern=_SCHEDULE_PATTERN,
+            applies=APPLIES_UPDATE_INSTANCE,
         ),
         # --- methodology (guarded: next run mints a new version) ---
         Setting(
@@ -399,6 +454,7 @@ def catalogue(session: Session) -> dict[str, Any]:
             "maximum": setting.maximum,
             "resolved": _resolve(setting, overrides),
             "source": _source(setting, overrides),
+            "applies": setting.applies,
         }
         if setting.methodology_parameter is not None:
             entry["recorded"] = recorded.get(setting.methodology_parameter)
@@ -506,7 +562,7 @@ def apply_change(
         )
     )
     session.flush()
-    return {"key": setting.key, "old": old, "new": normalized}
+    return {"key": setting.key, "old": old, "new": normalized, "applies": setting.applies}
 
 
 def _writable() -> dict[str, Setting]:
@@ -532,6 +588,8 @@ def _validate(setting: Setting, value: str) -> str:
             raise SettingsError(f"{setting.key} must be <= {setting.maximum:g}")
         _check_cross_rules(setting, float(number))
         return str(number)
+    if setting.pattern is not None and re.fullmatch(setting.pattern, value) is None:
+        raise SettingsError(f"{setting.key} does not match the accepted forms")
     return value
 
 

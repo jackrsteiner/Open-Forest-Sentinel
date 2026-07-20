@@ -125,3 +125,25 @@ def test_update_instance_workflow_has_the_sync_settings_contract() -> None:
     # waits for both.
     assert "needs: [sync, sync-aois]" in workflow
     assert "needs: [sync, sync-aois, sync-settings]" in workflow
+
+
+def test_update_vm_dispatch_escalates_and_bypasses_debounce(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bead 7.5 (#139): unit-rendered settings roll the VM, and a recent plain
+    sync must not swallow the rollout."""
+    import json
+
+    _configure(monkeypatch, tmp_path)
+    payloads: list[dict[str, Any]] = []
+
+    def post(url: str, headers: dict[str, str], body: bytes) -> int:
+        payloads.append(json.loads(body))
+        return 204
+
+    assert request_sync(reason="aoi-upload", http_post=post) is True
+    # Plain follow-up is debounced; the rollout is not.
+    assert request_sync(reason="settings-edit", http_post=post) is False
+    assert request_sync(reason="settings-edit", update_vm=True, http_post=post) is True
+    assert payloads[0]["inputs"]["update_vm"] == "false"
+    assert payloads[1]["inputs"]["update_vm"] == "true"

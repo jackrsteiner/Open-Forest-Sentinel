@@ -109,3 +109,48 @@ def test_export_timeout_is_an_editable_pipeline_knob(db_session: Session) -> Non
         db_session, key="FOREST_SENTINEL_EXPORT_TIMEOUT_SECONDS", value="7200"
     )
     assert changed["new"] == "7200"
+
+
+def test_schedule_knobs_validate_space_free_forms(db_session: Session) -> None:
+    """Bead 7.5 (#139): systemd-shorthand / time-of-day forms only — the value
+    crosses shell sourcing, sed rendering, and docker --env-file."""
+    for good in ("03:00", "03:00:00", "hourly", "daily"):
+        changed = settings.apply_change(db_session, key="PIPELINE_SCHEDULE", value=good)
+        assert changed["new"] == good
+        assert changed["applies"] == "update-instance"
+    for bad in ("*-*-* 03:00:00", "03:00 daily", 'daily"', "3#00", "Mon..Fri 03:00"):
+        with pytest.raises(settings.SettingsError):
+            settings.apply_change(db_session, key="PRUNE_SCHEDULE", value=bad)
+
+
+def test_pipeline_timeout_is_now_editable(db_session: Session) -> None:
+    entry = _by_key(catalogue(db_session))["PIPELINE_TIMEOUT"]
+    assert entry["editability"] == "editable"
+    assert entry["applies"] == "update-instance"
+    assert settings.apply_change(db_session, key="PIPELINE_TIMEOUT", value="12h")["new"] == "12h"
+    for bad in ("1h 30min", "fast", "20", '20h"'):
+        with pytest.raises(settings.SettingsError):
+            settings.apply_change(db_session, key="PIPELINE_TIMEOUT", value=bad)
+
+
+def test_next_run_knobs_report_next_run_applies(db_session: Session) -> None:
+    changed = settings.apply_change(db_session, key="WINDOW_DAYS", value="45")
+    assert changed["applies"] == "next-run"
+
+
+def test_vm_setup_renders_timers_from_env() -> None:
+    """Contract: timer templates carry the tokens; vm_setup seds them with the
+    defaults and sources overrides.env after instance.env."""
+    root = Path(__file__).resolve().parents[1]
+    pipeline_timer = (root / "scripts" / "systemd" / "forest-sentinel-pipeline.timer").read_text()
+    prune_timer = (root / "scripts" / "systemd" / "forest-sentinel-prune.timer").read_text()
+    assert "OnCalendar=@PIPELINE_SCHEDULE@" in pipeline_timer
+    assert "OnCalendar=@PRUNE_SCHEDULE@" in prune_timer
+
+    setup = (root / "scripts" / "vm_setup.sh").read_text()
+    assert "s#@PIPELINE_SCHEDULE@#${PIPELINE_SCHEDULE}#g" in setup
+    assert "s#@PRUNE_SCHEDULE@#${PRUNE_SCHEDULE}#g" in setup
+    assert 'PIPELINE_SCHEDULE="${PIPELINE_SCHEDULE:-03:00:00}"' in setup
+    assert 'PRUNE_SCHEDULE="${PRUNE_SCHEDULE:-02:30:00}"' in setup
+    # Overrides are sourced for the unit-rendering vars, after instance.env.
+    assert setup.index('. "${INSTANCE_ENV}"') < setup.index('. "${OVERRIDES_ENV}"')

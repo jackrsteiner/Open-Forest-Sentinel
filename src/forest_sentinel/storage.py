@@ -261,9 +261,7 @@ def local_disk_storage_from_env(staging: StagingBucket | None = None) -> LocalDi
         raise StorageConfigurationError(f"{GCS_STAGING_BUCKET_ENV_VAR} is not set")
     if staging is None:
         staging = GcsStagingBucket(bucket_name)
-    return LocalDiskStorage(
-        root, bucket_name, staging, timeout_seconds=_export_timeout_from_env()
-    )
+    return LocalDiskStorage(root, bucket_name, staging, timeout_seconds=_export_timeout_from_env())
 
 
 def _export_timeout_from_env() -> float:

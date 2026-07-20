@@ -1081,3 +1081,31 @@ def test_sync_dispatch_failure_never_blocks_the_write(
     assert saved.status_code == 200
     assert saved.json()["sync_requested"] is False
     assert "WINDOW_DAYS=45" in overrides.read_text()
+
+
+def test_unit_rendered_settings_request_a_vm_rollout(
+    client: TestClient, db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bead 7.5 (#139): schedule edits escalate the sync to update_vm; ordinary
+    knobs request a plain sync."""
+    from forest_sentinel import dispatch
+    from forest_sentinel.settings import OVERRIDES_PATH_ENV_VAR
+
+    monkeypatch.setenv(OVERRIDES_PATH_ENV_VAR, str(tmp_path / "overrides.env"))
+    requests: list[tuple[str, bool]] = []
+
+    def fake_sync(*, reason: str, update_vm: bool = False, **_kw: Any) -> bool:
+        requests.append((reason, update_vm))
+        return True
+
+    monkeypatch.setattr(dispatch, "request_sync", fake_sync)
+
+    schedule = client.post("/api/settings", json={"key": "PIPELINE_SCHEDULE", "value": "04:30"})
+    assert schedule.status_code == 200
+    assert "Update-instance" in schedule.json()["detail"]
+
+    plain = client.post("/api/settings", json={"key": "WINDOW_DAYS", "value": "45"})
+    assert plain.status_code == 200
+    assert "next pipeline run" in plain.json()["detail"]
+
+    assert requests == [("settings-edit", True), ("settings-edit", False)]

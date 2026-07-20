@@ -55,6 +55,7 @@ _last_dispatch: float | None = None
 def request_sync(
     *,
     reason: str,
+    update_vm: bool = False,
     http_post: Callable[[str, dict[str, str], bytes], int] | None = None,
 ) -> bool:
     """Fire the sync workflow (best-effort, debounced); True when dispatched.
@@ -63,6 +64,10 @@ def request_sync(
     failure must not un-succeed it. All misconfiguration paths (no token file
     configured, unreadable/empty token, no ``GITHUB_REPO``) are silent
     feature-off, not errors.
+
+    ``update_vm`` (bead 7.5) additionally rolls the VM — for settings that are
+    rendered into systemd units. Rollout requests bypass the debounce: a plain
+    sync moments earlier must not silently swallow the rollout.
     """
     token = _token()
     repo = os.environ.get(GITHUB_REPO_ENV_VAR, "").strip()
@@ -72,7 +77,7 @@ def request_sync(
     global _last_dispatch
     with _lock:
         now = time.monotonic()
-        if _last_dispatch is not None and now - _last_dispatch < DEBOUNCE_SECONDS:
+        if not update_vm and _last_dispatch is not None and now - _last_dispatch < DEBOUNCE_SECONDS:
             logger.debug("sync dispatch debounced (%s)", reason)
             return False
         # Claim the slot inside the lock: concurrent requests race to one dispatch.
@@ -84,7 +89,8 @@ def request_sync(
         "Accept": "application/vnd.github+json",
         "Content-Type": "application/json",
     }
-    body = json.dumps({"ref": "main", "inputs": DISPATCH_INPUTS}).encode()
+    inputs = dict(DISPATCH_INPUTS, update_vm="true") if update_vm else DISPATCH_INPUTS
+    body = json.dumps({"ref": "main", "inputs": inputs}).encode()
     try:
         status = (http_post or _post)(url, headers, body)
     except (urllib.error.URLError, OSError, TimeoutError) as exc:

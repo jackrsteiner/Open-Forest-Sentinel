@@ -1202,7 +1202,7 @@
               status.textContent = body.detail || `Failed (${response.status}).`;
               return;
             }
-            status.textContent = `Saved (was ${body.old ?? "unset"}); applies next run.`;
+            status.textContent = `Saved (was ${body.old ?? "unset"}) — ${body.detail}`;
           } catch (e) {
             status.textContent = "Failed to save.";
           } finally {

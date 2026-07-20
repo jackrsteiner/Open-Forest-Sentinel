@@ -62,12 +62,24 @@ if [ -f "${INSTANCE_ENV}" ]; then
     # shellcheck disable=SC1090
     . "${INSTANCE_ENV}"
 fi
+# Dashboard settings edits override instance.env for the values rendered below
+# (schedules, timeout). Safe to source: the write path only emits space-free,
+# shell-inert values (bead 7.5).
+OVERRIDES_ENV="${APP_DIR}/config/overrides.env"
+if [ -f "${OVERRIDES_ENV}" ]; then
+    # shellcheck disable=SC1090
+    . "${OVERRIDES_ENV}"
+fi
 if [ -z "${PROJECT_ID:-}" ]; then
     PROJECT_ID="$(curl -sf -H 'Metadata-Flavor: Google' \
         http://metadata.google.internal/computeMetadata/v1/project/project-id 2>/dev/null || true)"
 fi
 DASHBOARD_PORT="${DASHBOARD_PORT:-8000}"
 PIPELINE_TIMEOUT="${PIPELINE_TIMEOUT:-20h}"
+# Timer schedules (bead 7.5): a time of day (renders as daily) or a systemd
+# shorthand (hourly/daily/weekly). Space-free by construction — see above.
+PIPELINE_SCHEDULE="${PIPELINE_SCHEDULE:-03:00:00}"
+PRUNE_SCHEDULE="${PRUNE_SCHEDULE:-02:30:00}"
 # Image mode (#96): blank (the default) builds from source with uv; a
 # published image reference (e.g. ghcr.io/<owner>/open-forest-sentinel:<sha>)
 # runs the pipeline/dashboard/prune from that container instead.
@@ -151,13 +163,15 @@ sed "s#@APP_DIR@#${APP_DIR}#g; s#@USER@#${USER}#g" \
 sed "s#@APP_DIR@#${APP_DIR}#g; s#@USER@#${USER}#g; s#@PIPELINE_TIMEOUT@#${PIPELINE_TIMEOUT}#g" \
     scripts/systemd/forest-sentinel-pipeline.service \
     | sudo tee /etc/systemd/system/forest-sentinel-pipeline.service >/dev/null
-sudo cp scripts/systemd/forest-sentinel-pipeline.timer \
-    /etc/systemd/system/forest-sentinel-pipeline.timer
+sed "s#@PIPELINE_SCHEDULE@#${PIPELINE_SCHEDULE}#g" \
+    scripts/systemd/forest-sentinel-pipeline.timer \
+    | sudo tee /etc/systemd/system/forest-sentinel-pipeline.timer >/dev/null
 sed "s#@APP_DIR@#${APP_DIR}#g; s#@USER@#${USER}#g" \
     scripts/systemd/forest-sentinel-prune.service \
     | sudo tee /etc/systemd/system/forest-sentinel-prune.service >/dev/null
-sudo cp scripts/systemd/forest-sentinel-prune.timer \
-    /etc/systemd/system/forest-sentinel-prune.timer
+sed "s#@PRUNE_SCHEDULE@#${PRUNE_SCHEDULE}#g" \
+    scripts/systemd/forest-sentinel-prune.timer \
+    | sudo tee /etc/systemd/system/forest-sentinel-prune.timer >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now forest-sentinel-dashboard.service
 sudo systemctl enable --now forest-sentinel-pipeline.timer

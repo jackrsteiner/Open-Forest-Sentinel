@@ -485,13 +485,17 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         session.commit()
         # Best-effort, after the local write committed (bead 7.3): a dispatch
-        # failure never un-succeeds the edit.
-        synced = dispatch.request_sync(reason="settings-edit")
-        return {
-            **change,
-            "sync_requested": synced,
-            "detail": "applied; takes effect on the next pipeline run",
-        }
+        # failure never un-succeeds the edit. Unit-rendered settings (bead 7.5)
+        # escalate to a VM rollout so the change actually lands.
+        rollout = change.get("applies") == settings.APPLIES_UPDATE_INSTANCE
+        synced = dispatch.request_sync(reason="settings-edit", update_vm=rollout)
+        detail = (
+            "applied; rolls out on the next Update-instance run"
+            + (" (requested)" if synced else "")
+            if rollout
+            else "applied; takes effect on the next pipeline run"
+        )
+        return {**change, "sync_requested": synced, "detail": detail}
 
     @app.get("/api/context/layers")
     def list_context_layers(session: SessionDep) -> list[dict[str, Any]]:
