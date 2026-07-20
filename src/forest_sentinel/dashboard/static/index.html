@@ -245,7 +245,10 @@
       crossorigin=""
     ></script>
     <script>
-      const map = L.map("map").setView([0, 0], 2);
+      // Zoom lives bottom-right (#152); the top-left corner belongs to the
+      // basemap switcher.
+      const map = L.map("map", { zoomControl: false }).setView([0, 0], 2);
+      L.control.zoom({ position: "bottomright" }).addTo(map);
       // Basemap toggle (#145): streets (OSM), free satellite imagery (Esri
       // World Imagery — keyless XYZ, free with attribution, high-res but a
       // STATIC mosaic that may be years old), or NASA GIBS daily true color
