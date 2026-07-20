@@ -102,6 +102,20 @@
       }
       .run-event-failed { color: #c0392b; }
       .run-event-warning { color: #e67e22; }
+      /* Map controls (#145): basemap toggle button + click-to-copy toast. */
+      .basemap-toggle {
+        font: inherit; font-size: 12px; padding: 4px 8px; cursor: pointer;
+        background: #fff; border: 2px solid rgba(0, 0, 0, 0.25); border-radius: 4px;
+      }
+      .basemap-toggle:hover { background: #f4f4f4; }
+      .coord-toast {
+        position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+        z-index: 1100; /* above Leaflet panes and controls */
+        background: rgba(0, 0, 0, 0.75); color: #fff; font-size: 12px;
+        padding: 5px 10px; border-radius: 4px; pointer-events: none;
+        opacity: 0; transition: opacity 0.3s; white-space: nowrap;
+      }
+      .coord-toast.visible { opacity: 1; }
     </style>
   </head>
   <body>
@@ -196,10 +210,70 @@
     ></script>
     <script>
       const map = L.map("map").setView([0, 0], 2);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors",
-        maxZoom: 19,
-      }).addTo(map);
+      // Basemap toggle (#145): streets (OSM) or free satellite imagery (Esri
+      // World Imagery — keyless XYZ, free with attribution; alternatives like
+      // EOX Sentinel-2 cloudless top out around z14). Overlays are unaffected:
+      // tile layers render in Leaflet's tile pane, below all vector panes.
+      const baseLayers = {
+        streets: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap contributors",
+          maxZoom: 19,
+        }),
+        satellite: L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          {
+            attribution:
+              "Imagery &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+            maxZoom: 19,
+          },
+        ),
+      };
+      let activeBase = "streets";
+      baseLayers[activeBase].addTo(map);
+
+      const BasemapToggle = L.Control.extend({
+        options: { position: "topleft" },
+        onAdd() {
+          const button = L.DomUtil.create("button", "basemap-toggle");
+          button.type = "button";
+          button.title = "Switch base map";
+          button.textContent = "Satellite"; // labels the layer you'd switch TO
+          // A control click must not fall through to the map (and copy coords).
+          L.DomEvent.disableClickPropagation(button);
+          L.DomEvent.on(button, "click", () => {
+            const next = activeBase === "streets" ? "satellite" : "streets";
+            map.removeLayer(baseLayers[activeBase]);
+            baseLayers[next].addTo(map);
+            activeBase = next;
+            button.textContent = next === "streets" ? "Satellite" : "Streets";
+          });
+          return button;
+        },
+      });
+      map.addControl(new BasemapToggle());
+
+      // Click-to-copy coordinates (#145). Also fires when a click opens a
+      // feature popup — harmless, the clicked point is still what's copied.
+      const coordToast = L.DomUtil.create("div", "coord-toast", map.getContainer());
+      let coordToastTimer = null;
+      function showCoordToast(text) {
+        coordToast.textContent = text;
+        coordToast.classList.add("visible");
+        clearTimeout(coordToastTimer);
+        coordToastTimer = setTimeout(() => coordToast.classList.remove("visible"), 2500);
+      }
+      map.on("click", async (e) => {
+        const point = e.latlng.wrap(); // longitude in [-180, 180] after panning
+        const coords = `${point.lat.toFixed(6)}, ${point.lng.toFixed(6)}`;
+        try {
+          // Secure contexts only (https or the localhost SSH tunnel).
+          await navigator.clipboard.writeText(coords);
+          showCoordToast(`Copied ${coords}`);
+        } catch {
+          // No clipboard (e.g. world-open plain-http): still show the value.
+          showCoordToast(coords);
+        }
+      });
 
       let eventsLayer = null;
       const layersById = {};
