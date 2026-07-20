@@ -108,11 +108,10 @@ def auto_version(parameters: dict[str, Any]) -> str:
 def raster_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     """The raster-lineage subset of a full methodology parameter dict.
 
-    Rows minted before the raster/detection split carry only
-    ``ee_script_version``; it doubles as the raster pin so lineages derived
-    from pre-split parameters content-match the ones new runs derive — the
-    upgrade itself reuses every existing COG. (Migration 0020's backfill
-    freezes a copy of this mapping; keep them in sync.)
+    Parameter dicts that carry only ``ee_script_version`` (minted before the
+    raster/detection split, or minimal test methodologies) let it double as the
+    raster pin, so their lineages content-match the ones fully-specified
+    parameter sets derive.
     """
     subset = {key: parameters[key] for key in RASTER_PARAM_KEYS if key in parameters}
     if _RASTER_SCRIPT_KEY not in subset and "ee_script_version" in parameters:

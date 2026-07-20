@@ -324,16 +324,6 @@ def test_migrations_add_pipeline_run_methodology_column(
     assert "fk_pipeline_run_methodology" in fks
 
 
-def test_downgrade_removes_pipeline_run_methodology_column(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0009_pipeline_run")
-
-    columns = {column["name"] for column in inspect(clean_database).get_columns("pipeline_run")}
-    assert "methodology_version_id" not in columns
-
-
 def test_migrations_add_candidate_statistics_columns(
     alembic_config: Config, clean_database: Engine
 ) -> None:
@@ -346,66 +336,6 @@ def test_migrations_add_candidate_statistics_columns(
     for name in ("delta_mean", "delta_min", "valid_pixel_fraction"):
         assert name in columns
         assert columns[name]["nullable"]  # pre-#95 rows stay null
-
-
-def test_downgrade_removes_candidate_statistics_columns(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0010_pipeline_run_methodology")
-
-    columns = {
-        column["name"] for column in inspect(clean_database).get_columns("disturbance_candidate")
-    }
-    assert columns.isdisjoint({"delta_mean", "delta_min", "valid_pixel_fraction"})
-
-
-def test_migrations_backfill_methodology_display_versions(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    """0012 labels pre-existing rows with the same bump rule new mints use."""
-    from sqlalchemy import text
-
-    command.upgrade(alembic_config, "0011_candidate_statistics")
-    with clean_database.connect() as connection:
-        for version, params in (
-            ("1.0.0", '{"ee_script_version": "s1"}'),
-            ("auto-aaa", '{"ee_script_version": "s1", "threshold": -0.3}'),
-            ("auto-bbb", '{"ee_script_version": "s2"}'),
-        ):
-            connection.execute(
-                text(
-                    "INSERT INTO methodology_version (name, version, parameters) "
-                    "VALUES ('optical-change', :v, CAST(:p AS jsonb))"
-                ),
-                {"v": version, "p": params},
-            )
-        connection.commit()
-
-    command.upgrade(alembic_config, "head")
-
-    with clean_database.connect() as connection:
-        rows = connection.execute(
-            text("SELECT version, display_version FROM methodology_version ORDER BY id")
-        ).all()
-    # Same script -> patch bump; changed script -> minor bump.
-    assert [tuple(row) for row in rows] == [
-        ("1.0.0", "1.0.0"),
-        ("auto-aaa", "1.0.1"),
-        ("auto-bbb", "1.1.0"),
-    ]
-
-
-def test_downgrade_removes_methodology_display_version(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0011_candidate_statistics")
-
-    columns = {
-        column["name"] for column in inspect(clean_database).get_columns("methodology_version")
-    }
-    assert "display_version" not in columns
 
 
 def test_migrations_create_manual_review_table(
@@ -428,15 +358,6 @@ def test_migrations_create_manual_review_table(
     assert "ck_manual_review_opinion" in checks
     indexes = {index["name"] for index in inspector.get_indexes("manual_review")}
     assert "ix_manual_review_event_id" in indexes
-
-
-def test_downgrade_removes_manual_review_table(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0012_methodology_display_version")
-
-    assert "manual_review" not in inspect(clean_database).get_table_names()
 
 
 def test_migrations_create_confidence_assessment_table(
@@ -471,15 +392,6 @@ def test_migrations_create_confidence_assessment_table(
     assert "ck_confidence_assessment_level" in checks
 
 
-def test_downgrade_removes_confidence_assessment_table(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0013_manual_review")
-
-    assert "confidence_assessment" not in inspect(clean_database).get_table_names()
-
-
 def test_migrations_create_sensor_source_and_orbit_fields(
     alembic_config: Config, clean_database: Engine
 ) -> None:
@@ -504,18 +416,6 @@ def test_migrations_create_sensor_source_and_orbit_fields(
     assert {"orbit_direction", "relative_orbit"} <= observation_columns
 
 
-def test_downgrade_removes_sensor_source_and_orbit_fields(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0014_confidence_assessment")
-
-    inspector = inspect(clean_database)
-    assert "sensor_source" not in inspector.get_table_names()
-    observation_columns = {c["name"] for c in inspector.get_columns("observation")}
-    assert observation_columns.isdisjoint({"orbit_direction", "relative_orbit"})
-
-
 def test_migrations_add_radar_baseline_provenance(
     alembic_config: Config, clean_database: Engine
 ) -> None:
@@ -525,15 +425,6 @@ def test_migrations_add_radar_baseline_provenance(
     }
     assert "baseline_source_scene_ids" in columns
     assert columns["baseline_source_scene_ids"]["nullable"]  # optical rows stay null
-
-
-def test_downgrade_removes_radar_baseline_provenance(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0015_sensor_source")
-    columns = {c["name"] for c in inspect(clean_database).get_columns("change_raster")}
-    assert "baseline_source_scene_ids" not in columns
 
 
 def test_migrations_create_context_tables(alembic_config: Config, clean_database: Engine) -> None:
@@ -559,15 +450,6 @@ def test_migrations_create_context_tables(alembic_config: Config, clean_database
     assert row[1] == 4326
 
 
-def test_downgrade_removes_context_tables(alembic_config: Config, clean_database: Engine) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0016_radar_baseline_provenance")
-
-    tables = inspect(clean_database).get_table_names()
-    assert "context_layer" not in tables
-    assert "context_feature" not in tables
-
-
 def test_migrations_create_event_context_table(
     alembic_config: Config, clean_database: Engine
 ) -> None:
@@ -581,98 +463,51 @@ def test_migrations_create_event_context_table(
     )
 
 
-def test_downgrade_removes_event_context_table(
+def test_single_baseline_migration_round_trips(
     alembic_config: Config, clean_database: Engine
 ) -> None:
-    command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, "0017_context_layers")
-
-    assert "event_context" not in inspect(clean_database).get_table_names()
-
-
-def test_migration_0020_backfills_lineages_and_repoints_rasters(
-    alembic_config: Config, clean_database: Engine
-) -> None:
-    """0020 derives each methodology's raster lineage from its stored parameters
-    (pre-split ee_script_version doubling as the raster pin), repoints rasters,
-    and backfills extraction markers — existing artifacts stay reusable."""
+    """The squashed baseline: one revision creates the full schema (plus the
+    sensor_source seeds), and downgrading to base removes every app table while
+    leaving PostGIS's spatial_ref_sys alone."""
     from sqlalchemy import text
 
-    from forest_sentinel.methodology import auto_version, raster_parameters
-
-    command.upgrade(alembic_config, "0019_run_aoi_geometry_hash")
-    parameters = (
-        '{"ee_script_version": "slice1-optical-change-v1", "scale_m": 30, '
-        '"baseline_window": 5, "delta_nbr_threshold": -0.25}'
-    )
-    with clean_database.connect() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO aoi (name, geometry) VALUES ('A', "
-                "ST_GeomFromText('MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)))', 4326))"
-            )
-        )
-        connection.execute(
-            text(
-                "INSERT INTO observation (aoi_id, sensor, acquired_at, source_scene_id) "
-                "VALUES (1, 'HLSL30', '2026-01-06T00:00:00Z', 'scene-6')"
-            )
-        )
-        connection.execute(
-            text(
-                "INSERT INTO methodology_version (name, version, parameters) "
-                "VALUES ('optical-change', '1.0.0', CAST(:p AS jsonb))"
-            ),
-            {"p": parameters},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO index_raster (observation_id, methodology_version_id, "
-                "index_type, cog_path) VALUES (1, 1, 'NBR', '/cogs/nbr.tif')"
-            )
-        )
-        connection.execute(
-            text(
-                "INSERT INTO change_raster (observation_id, methodology_version_id, "
-                "change_type, cog_path, baseline_window) "
-                "VALUES (1, 1, 'delta_nbr', '/cogs/delta.tif', 5)"
-            )
-        )
-        connection.commit()
-
     command.upgrade(alembic_config, "head")
-
+    inspector = inspect(clean_database)
+    tables = set(inspector.get_table_names())
+    assert {
+        "aoi",
+        "observation",
+        "sensor_source",
+        "raster_lineage",
+        "methodology_version",
+        "quality_mask",
+        "index_raster",
+        "change_raster",
+        "change_raster_source",
+        "disturbance_candidate",
+        "candidate_extraction",
+        "disturbance_event",
+        "event_observation",
+        "manual_review",
+        "confidence_assessment",
+        "context_layer",
+        "context_feature",
+        "event_context",
+        "pipeline_run",
+        "pipeline_run_event",
+        "settings_change",
+    } <= tables
     with clean_database.connect() as connection:
-        lineage = connection.execute(
-            text("SELECT id, name, version, parameters FROM raster_lineage")
-        ).one()
-        methodology_lineage = connection.execute(
-            text("SELECT raster_lineage_id FROM methodology_version WHERE id = 1")
-        ).scalar_one()
-        index_lineage = connection.execute(
-            text("SELECT raster_lineage_id FROM index_raster WHERE id = 1")
-        ).scalar_one()
-        change_lineage = connection.execute(
-            text("SELECT raster_lineage_id FROM change_raster WHERE id = 1")
-        ).scalar_one()
-        markers = connection.execute(
-            text("SELECT change_raster_id, methodology_version_id FROM candidate_extraction")
-        ).all()
+        seeds = connection.execute(text("SELECT name, kind FROM sensor_source ORDER BY name")).all()
+        version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert [tuple(row) for row in seeds] == [
+        ("HLSL30", "optical"),
+        ("HLSS30", "optical"),
+        ("S1GRD", "radar"),
+    ]
+    assert version == "0001_initial_schema"
 
-    assert methodology_lineage == index_lineage == change_lineage == lineage[0]
-    assert lineage[1] == "optical-change"
-    # The migration's frozen derivation must content-match the live code's, so
-    # rasters minted before the split stay reusable after it.
-    expected_subset = raster_parameters(
-        {
-            "ee_script_version": "slice1-optical-change-v1",
-            "scale_m": 30,
-            "baseline_window": 5,
-            "delta_nbr_threshold": -0.25,
-        }
-    )
-    assert lineage[3] == expected_subset
-    assert lineage[2] == auto_version(expected_subset)
-    # Pre-split extraction invariant carried over: raster 1 was extracted by
-    # methodology 1.
-    assert [tuple(marker) for marker in markers] == [(1, 1)]
+    command.downgrade(alembic_config, "base")
+    remaining = set(inspect(clean_database).get_table_names())
+    assert "spatial_ref_sys" in remaining  # PostGIS system table survives
+    assert not remaining & {"aoi", "observation", "methodology_version", "pipeline_run"}
