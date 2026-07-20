@@ -28,6 +28,7 @@ from sqlalchemy import Engine, cast, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from forest_sentinel import settings
 from forest_sentinel.aoi import (
     AOIS_DIR_ENV_VAR,
     DEFAULT_AOIS_DIR,
@@ -432,6 +433,18 @@ def create_app() -> FastAPI:
             }
             for methodology, run_count, last_run_at in rows
         ]
+
+    @app.get("/api/settings")
+    def settings_catalogue(session: SessionDep) -> dict[str, Any]:
+        """The live config catalogue (Slice 7 bead 7.1, #134).
+
+        Every runtime configuration value in the four config-inventory
+        categories, with its purpose, layered resolved value (overrides file →
+        environment → default), editability class, and the implications of
+        changing it. Read-only; secrets are redacted before they reach the
+        response.
+        """
+        return settings.catalogue(session)
 
     @app.get("/api/context/layers")
     def list_context_layers(session: SessionDep) -> list[dict[str, Any]]:

@@ -903,3 +903,27 @@ def test_event_detail_lists_context_relations(client: TestClient, db_session: Se
     assert by_relation["contains"]["name"] == "feature-0"
     assert by_relation["contains"]["distance_m"] is None
     assert by_relation["nearby"]["distance_m"] > 0
+
+
+def test_settings_endpoint_serves_the_catalogue(
+    client: TestClient, db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 7 bead 7.1 (#134): the live catalogue over the inventory categories."""
+    from forest_sentinel.settings import OVERRIDES_PATH_ENV_VAR
+
+    monkeypatch.setenv(OVERRIDES_PATH_ENV_VAR, str(tmp_path / "overrides.env"))
+    from tests.fakes import make_methodology
+
+    make_methodology(db_session, version="auto-s", parameters={"min_area_m2": 9000.0})
+
+    response = client.get("/api/settings")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["categories"] == ["instance", "pipeline-tuning", "methodology", "lifecycle"]
+    by_key = {entry["key"]: entry for entry in body["settings"]}
+    assert by_key["THRESHOLD"]["editability"] == "guarded"
+    assert by_key["WINDOW_DAYS"]["editability"] == "editable"
+    assert by_key["FOREST_SENTINEL_COG_ROOT"]["editability"] == "display-only"
+    assert by_key["MIN_AREA"]["recorded"] == 9000.0
+    # Secrets never reach the response.
+    assert "secret" not in json.dumps(body)

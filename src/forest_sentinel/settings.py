@@ -1,0 +1,447 @@
+"""The settings catalogue and guarded writes (Slice 7, beads 7.1/7.2).
+
+The catalogue is the live counterpart of ``docs/config-inventory.md``: every
+runtime configuration value, grouped into the audit's four categories, with its
+purpose, its *resolved* value on this instance, and the implications of
+changing it. Resolution is layered the way the next pipeline run will see it:
+``config/overrides.env`` (dashboard edits) → process environment → default —
+the dashboard process's own environment can be stale (it loaded ``.env`` at
+start), so the overrides file is read directly.
+
+Writes (bead 7.2) are an **allowlist, not a blocklist**: only keys registered
+as ``editable`` or ``guarded`` exist for the write path at all. Instance
+identity and the silent-re-export footguns (``FOREST_SENTINEL_DATABASE_URL``,
+``FOREST_SENTINEL_COG_ROOT``) are display-only and rejected as unknown keys.
+Methodology keys are ``guarded``: changing one mints a new content-addressed
+methodology version on the next run (rasters are reused — Finding 1 — but
+event lineages split at the boundary), so the write requires an explicit
+confirmation flag and the consequence text rides the error until it is given.
+
+Edits land in ``config/overrides.env``; ``vm_setup.sh`` appends that file when
+regenerating ``.env`` (after ``instance.env`` — "last assignment wins" — but
+before the world-open forced-off guard lines, which must always win). Every
+accepted change appends a ``settings_change`` row; with tunnel-as-auth there
+is no "who", and the UI says so.
+"""
+
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from forest_sentinel.models import MethodologyVersion
+
+OVERRIDES_PATH_ENV_VAR = "FOREST_SENTINEL_OVERRIDES_PATH"
+DEFAULT_OVERRIDES_PATH = "config/overrides.env"
+
+CATEGORY_INSTANCE = "instance"
+CATEGORY_PIPELINE = "pipeline-tuning"
+CATEGORY_METHODOLOGY = "methodology"
+CATEGORY_LIFECYCLE = "lifecycle"
+CATEGORIES = (CATEGORY_INSTANCE, CATEGORY_PIPELINE, CATEGORY_METHODOLOGY, CATEGORY_LIFECYCLE)
+
+EDITABLE = "editable"
+GUARDED = "guarded"  # editable, but only with an explicit consequence confirmation
+DISPLAY_ONLY = "display-only"
+
+# The consequence copy echoed by the UI and required-by-error for guarded keys
+# (config-inventory Finding 7 / architecture §5.9 operator note).
+METHODOLOGY_CHANGE_CONSEQUENCE = (
+    "Changing a methodology parameter mints a new content-addressed methodology version on "
+    "the next run: existing events stop growing and will auto-resolve, and the new lineage "
+    "starts fresh events. Rasters are reused (raster/detection split) — candidates "
+    "re-extract without new Earth Engine exports."
+)
+
+
+@dataclass(frozen=True)
+class Setting:
+    """One catalogue entry; ``key`` is the env-file key edits are written under."""
+
+    key: str
+    category: str
+    purpose: str
+    implications: str
+    editability: str = DISPLAY_ONLY
+    default: str | None = None
+    value_type: str = "str"  # str | int | float | choice
+    choices: tuple[str, ...] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    redact: bool = False
+    # For methodology keys: the parameter name recorded in methodology_version
+    # rows, so the catalogue can show what the current lineage actually used.
+    methodology_parameter: str | None = None
+    # Fixed values (code constants) have no env key to resolve; show this.
+    constant: str | None = None
+
+
+def _registry() -> tuple[Setting, ...]:
+    # Imported lazily: cli imports settings' siblings; keep import edges simple.
+    from forest_sentinel import candidates, change, cli, forestmask, indices, qa, radar
+    from forest_sentinel.hls import HLS_COLLECTIONS
+
+    return (
+        # --- instance (display-only: provisioning identity and footguns) ---
+        Setting(
+            key="FOREST_SENTINEL_GEE_PROJECT",
+            category=CATEGORY_INSTANCE,
+            purpose="Cloud project Earth Engine bills quota against.",
+            implications="Billing/quota only; results are identical regardless of project.",
+        ),
+        Setting(
+            key="FOREST_SENTINEL_GCS_STAGING_BUCKET",
+            category=CATEGORY_INSTANCE,
+            purpose="Transient staging bucket EE exports pass through.",
+            implications="Contents are transient (1-day TTL); safe to swap between runs.",
+        ),
+        Setting(
+            key="FOREST_SENTINEL_COG_ROOT",
+            category=CATEGORY_INSTANCE,
+            purpose="Canonical local COG store.",
+            implications=(
+                "Footgun: changing it without moving files fails every reuse check and "
+                "silently re-exports the whole window (the pipeline warns at run start). "
+                "Not editable here."
+            ),
+        ),
+        Setting(
+            key="FOREST_SENTINEL_DATABASE_URL",
+            category=CATEGORY_INSTANCE,
+            purpose="The PostGIS catalog — the reproduction recipe.",
+            implications=(
+                "Treat as immutable per instance: repointing orphans all history and "
+                "re-exports the window. Not editable here."
+            ),
+            redact=True,
+        ),
+        Setting(
+            key="FOREST_SENTINEL_AOIS_DIR",
+            category=CATEGORY_INSTANCE,
+            purpose="Directory of AOI GeoJSONs (seeds + dashboard uploads).",
+            implications="Path plumbing; uploads land here and sync back to the repo.",
+            default="config/aois",
+        ),
+        Setting(
+            key="FOREST_SENTINEL_CONTEXT_DIR",
+            category=CATEGORY_INSTANCE,
+            purpose="Directory of context-layer GeoJSONs.",
+            implications="Path plumbing; harvested at every run start.",
+            default="config/context",
+        ),
+        Setting(
+            key="FOREST_SENTINEL_SETTINGS_EDIT",
+            category=CATEGORY_INSTANCE,
+            purpose="Write guard for this settings surface.",
+            implications=(
+                "Security posture, deliberately not editable from the surface it guards; "
+                "forced to 0 on a world-open dashboard."
+            ),
+            default="1",
+            choices=("0", "1"),
+            value_type="choice",
+        ),
+        # --- pipeline tuning (freely editable; never affects results) ---
+        Setting(
+            key="FOREST_SENTINEL_MAX_CONCURRENT_EXPORTS",
+            category=CATEGORY_PIPELINE,
+            purpose="Earth Engine batch exports kept in flight together.",
+            implications=(
+                "Throughput/cost only; applies on the next run. Raise toward your EE "
+                "tier's task limit for faster windows."
+            ),
+            editability=EDITABLE,
+            default=str(cli.DEFAULT_MAX_CONCURRENT_EXPORTS),
+            value_type="int",
+            minimum=1,
+            maximum=64,
+        ),
+        Setting(
+            key="PIPELINE_TIMEOUT",
+            category=CATEGORY_PIPELINE,
+            purpose="systemd budget for one pipeline run (TimeoutStartSec).",
+            implications=(
+                "Baked into the unit by vm_setup.sh from instance.env; editing requires an "
+                "Update-instance run, so it is display-only here."
+            ),
+            default="20h",
+        ),
+        # --- methodology (guarded: next run mints a new version) ---
+        Setting(
+            key="THRESHOLD",
+            category=CATEGORY_METHODOLOGY,
+            purpose="ΔNBR drop that makes a pixel a disturbance candidate.",
+            implications=METHODOLOGY_CHANGE_CONSEQUENCE,
+            editability=GUARDED,
+            default=str(candidates.DEFAULT_DELTA_NBR_THRESHOLD),
+            value_type="float",
+            minimum=-2.0,
+            maximum=0.0,
+            methodology_parameter="delta_nbr_threshold",
+        ),
+        Setting(
+            key="MIN_AREA",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Minimum candidate polygon area (m²); smaller patches are noise.",
+            implications=METHODOLOGY_CHANGE_CONSEQUENCE,
+            editability=GUARDED,
+            default=str(candidates.DEFAULT_MIN_AREA_M2),
+            value_type="float",
+            minimum=0,
+            methodology_parameter="min_area_m2",
+        ),
+        Setting(
+            key="BASELINE_WINDOW",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Prior observations reduced into the trailing-median baseline.",
+            implications=(
+                METHODOLOGY_CHANGE_CONSEQUENCE
+                + " Baseline window is a raster-lineage input: unlike threshold changes, "
+                "this one re-exports the window from Earth Engine."
+            ),
+            editability=GUARDED,
+            default=str(change.DEFAULT_BASELINE_WINDOW),
+            value_type="int",
+            minimum=1,
+            maximum=30,
+            methodology_parameter="baseline_window",
+        ),
+        Setting(
+            key="FOREST_SENTINEL_FOREST_MASK",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Forest mask restricting candidates to forested pixels.",
+            implications=METHODOLOGY_CHANGE_CONSEQUENCE,
+            editability=GUARDED,
+            default=forestmask.DEFAULT_SOURCE,
+            value_type="choice",
+            choices=(
+                forestmask.SOURCE_HANSEN,
+                forestmask.SOURCE_WORLDCOVER,
+                forestmask.SOURCE_NONE,
+            ),
+        ),
+        Setting(
+            key="FOREST_SENTINEL_FOREST_MASK_ASSET",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Earth Engine asset the forest mask is built from.",
+            implications=METHODOLOGY_CHANGE_CONSEQUENCE,
+            editability=GUARDED,
+            default=forestmask.DEFAULT_HANSEN_ASSET,
+        ),
+        Setting(
+            key="FOREST_SENTINEL_FOREST_MASK_CANOPY_PCT",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Hansen canopy-cover percent counted as forest.",
+            implications=METHODOLOGY_CHANGE_CONSEQUENCE,
+            editability=GUARDED,
+            default=str(forestmask.DEFAULT_CANOPY_THRESHOLD_PCT),
+            value_type="float",
+            minimum=0,
+            maximum=100,
+        ),
+        Setting(
+            key="FOREST_SENTINEL_RADAR",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Enable the Sentinel-1 radar lineage.",
+            implications=(
+                "Enabling adds a separate radar-change methodology lineage (new S1 work, "
+                "no optical impact); disabling stops new radar detections."
+            ),
+            editability=GUARDED,
+            default="0",
+            value_type="choice",
+            choices=("0", "1"),
+        ),
+        Setting(
+            key="FOREST_SENTINEL_RADAR_THRESHOLD",
+            category=CATEGORY_METHODOLOGY,
+            purpose="VV backscatter drop (dB) that makes a radar candidate.",
+            implications=METHODOLOGY_CHANGE_CONSEQUENCE,
+            editability=GUARDED,
+            default=str(radar.DEFAULT_DELTA_VV_DB_THRESHOLD),
+            value_type="float",
+            minimum=-30.0,
+            maximum=0.0,
+            methodology_parameter="delta_vv_db_threshold",
+        ),
+        Setting(
+            key="SCALE_M",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Export/vectorize resolution (HLS native grid).",
+            implications="Code constant; recorded in every lineage.",
+            constant=str(indices.DEFAULT_SCALE_METERS),
+        ),
+        Setting(
+            key="MASKED_CATEGORIES",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Fmask QA categories masked out of every observation.",
+            implications="Code constant; recorded in every lineage.",
+            constant=", ".join(qa.MASK_CATEGORIES),
+        ),
+        Setting(
+            key="COLLECTIONS",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Source imagery collections.",
+            implications="Code constant; recorded in every lineage.",
+            constant=", ".join(sorted(HLS_COLLECTIONS)),
+        ),
+        Setting(
+            key="SCRIPT_VERSIONS",
+            category=CATEGORY_METHODOLOGY,
+            purpose="Per-stage EE code pins (raster / detection).",
+            implications=(
+                "Bumping the raster pin re-exports lineages; the detection pin only "
+                "re-extracts candidates (Finding 4)."
+            ),
+            constant=(
+                f"raster={cli.RASTER_SCRIPT_VERSION}, detection={cli.EE_SCRIPT_VERSION}, "
+                f"radar={cli.RADAR_SCRIPT_VERSION}"
+            ),
+        ),
+        # --- lifecycle & interpretation (freely editable) ---
+        Setting(
+            key="WINDOW_DAYS",
+            category=CATEGORY_LIFECYCLE,
+            purpose="How many trailing days each scheduled run scans.",
+            implications=(
+                "Scan scope, not methodology. Enlarging backfills older scenes (new EE "
+                "work, not redundant); shrinking discards nothing. Also floors COG "
+                "retention at WINDOW_DAYS + 14."
+            ),
+            editability=EDITABLE,
+            default="30",
+            value_type="int",
+            minimum=1,
+            maximum=365,
+        ),
+        Setting(
+            key="COG_RETENTION_DAYS",
+            category=CATEGORY_LIFECYCLE,
+            purpose="Days of local COG files kept before pruning (0 = keep forever).",
+            implications=(
+                "Storage-for-compute trade: pruned COGs re-export on demand from recorded "
+                "provenance, and local re-extraction needs the file on disk. Floored at "
+                "WINDOW_DAYS + 14 at prune time."
+            ),
+            editability=EDITABLE,
+            default="90",
+            value_type="int",
+            minimum=0,
+            maximum=3650,
+        ),
+        Setting(
+            key="RESOLVED_AFTER_DAYS",
+            category=CATEGORY_LIFECYCLE,
+            purpose="Quiet days (plus a clear look) before an event auto-resolves.",
+            implications=(
+                "Interpretation, not methodology (never re-exports). Lengthening does not "
+                "revive already-resolved events."
+            ),
+            editability=EDITABLE,
+            default="90",
+            value_type="int",
+            minimum=1,
+            maximum=3650,
+        ),
+        Setting(
+            key="CONTEXT_BUFFER_M",
+            category=CATEGORY_LIFECYCLE,
+            purpose="Search distance for nearby context features (meters).",
+            implications="Presentation only; relations are recomputed wholesale each run.",
+            editability=EDITABLE,
+            default="5000",
+            value_type="int",
+            minimum=1,
+            maximum=1_000_000,
+        ),
+    )
+
+
+def catalogue(session: Session) -> dict[str, Any]:
+    """Every setting with its layered resolved value, grouped for the UI."""
+    recorded = _recorded_methodology_parameters(session)
+    overrides = read_overrides()
+    entries = []
+    for setting in _registry():
+        entry: dict[str, Any] = {
+            "key": setting.key,
+            "category": setting.category,
+            "purpose": setting.purpose,
+            "implications": setting.implications,
+            "editability": setting.editability,
+            "default": setting.default,
+            "value_type": setting.value_type if setting.constant is None else "constant",
+            "choices": list(setting.choices) if setting.choices else None,
+            "minimum": setting.minimum,
+            "maximum": setting.maximum,
+            "resolved": _resolve(setting, overrides),
+            "source": _source(setting, overrides),
+        }
+        if setting.methodology_parameter is not None:
+            entry["recorded"] = recorded.get(setting.methodology_parameter)
+        entries.append(entry)
+    return {"categories": list(CATEGORIES), "settings": entries}
+
+
+def _resolve(setting: Setting, overrides: dict[str, str]) -> str | None:
+    if setting.constant is not None:
+        return setting.constant
+    value = overrides.get(setting.key) or os.environ.get(setting.key) or setting.default
+    if value is not None and setting.redact:
+        return _redacted(value)
+    return value
+
+
+def _source(setting: Setting, overrides: dict[str, str]) -> str:
+    if setting.constant is not None:
+        return "code"
+    if overrides.get(setting.key):
+        return "override"
+    if os.environ.get(setting.key):
+        return "environment"
+    return "default"
+
+
+def _redacted(value: str) -> str:
+    """Host/database only for connection URLs — never credentials."""
+    match = re.match(r"^[a-z0-9+]+://(?:[^@/]*@)?(?P<rest>.*)$", value)
+    return f"…@{match.group('rest')}" if match else "(redacted)"
+
+
+def _recorded_methodology_parameters(session: Session) -> dict[str, Any]:
+    """Parameters of the most recently minted methodology per name, flattened.
+
+    Radar keys never collide with optical ones (distinct parameter names), so a
+    single flat mapping serves the catalogue.
+    """
+    recorded: dict[str, Any] = {}
+    rows = (
+        session.execute(select(MethodologyVersion).order_by(MethodologyVersion.id)).scalars().all()
+    )
+    latest_by_name: dict[str, MethodologyVersion] = {row.name: row for row in rows}
+    for row in latest_by_name.values():
+        recorded.update(row.parameters)
+    return recorded
+
+
+def overrides_path() -> Path:
+    return Path(os.environ.get(OVERRIDES_PATH_ENV_VAR, DEFAULT_OVERRIDES_PATH))
+
+
+def read_overrides() -> dict[str, str]:
+    """KEY=value pairs from the overrides file (missing file = no overrides)."""
+    path = overrides_path()
+    if not path.exists():
+        return {}
+    overrides: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        overrides[key.strip()] = value.strip()
+    return overrides

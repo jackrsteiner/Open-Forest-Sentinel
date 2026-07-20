@@ -170,6 +170,14 @@
         <h2>Methodologies</h2>
         <div id="methodology-list"></div>
       </div>
+      <div id="settings-panel">
+        <h2>Settings</h2>
+        <div class="muted">
+          Live values as the next run will resolve them. Changes are recorded without a
+          user identity (tunnel-as-auth).
+        </div>
+        <div id="settings-list" class="muted">Loading…</div>
+      </div>
       <div id="add-aoi">
         <h2>Add AOI</h2>
         <input type="file" id="aoi-file" accept=".geojson,.json" />
@@ -1072,6 +1080,75 @@
         }
       }
 
+      // The live settings catalogue (Slice 7 bead 7.1): the four config-inventory
+      // categories, each value's resolved state, and the implications of changing
+      // it. Values are operator data — built with DOM APIs, never innerHTML.
+      const SETTINGS_CATEGORY_LABELS = {
+        instance: "Instance",
+        "pipeline-tuning": "Pipeline tuning",
+        methodology: "Methodology",
+        lifecycle: "Lifecycle & interpretation",
+      };
+      async function loadSettings() {
+        const container = document.getElementById("settings-list");
+        let data;
+        try {
+          data = await (await fetch("/api/settings")).json();
+        } catch (e) {
+          container.textContent = "Settings unavailable.";
+          return;
+        }
+        container.innerHTML = "";
+        container.className = "";
+        data.categories.forEach((category) => {
+          const entries = data.settings.filter((s) => s.category === category);
+          if (!entries.length) return;
+          const section = document.createElement("details");
+          section.className = "settings-category";
+          const summary = document.createElement("summary");
+          summary.textContent = SETTINGS_CATEGORY_LABELS[category] || category;
+          section.appendChild(summary);
+          entries.forEach((setting) => section.appendChild(settingRow(setting)));
+          container.appendChild(section);
+        });
+      }
+
+      function settingRow(setting) {
+        const row = document.createElement("div");
+        row.className = "setting";
+        const head = document.createElement("div");
+        const name = document.createElement("code");
+        name.textContent = setting.key;
+        head.appendChild(name);
+        const value = document.createElement("span");
+        value.className = "setting-value";
+        value.textContent =
+          setting.resolved == null ? "(unset)" : ` ${setting.resolved}`;
+        head.appendChild(value);
+        const source = document.createElement("span");
+        source.className = "muted";
+        source.textContent =
+          ` · ${setting.source}` +
+          (setting.editability === "display-only" ? " · read-only" : "");
+        head.appendChild(source);
+        row.appendChild(head);
+        const purpose = document.createElement("div");
+        purpose.className = "param muted";
+        purpose.textContent = setting.purpose;
+        row.appendChild(purpose);
+        const implications = document.createElement("div");
+        implications.className = "param muted";
+        implications.textContent = setting.implications;
+        row.appendChild(implications);
+        if (setting.recorded !== undefined && setting.recorded !== null) {
+          const recorded = document.createElement("div");
+          recorded.className = "param muted";
+          recorded.textContent = `current methodology recorded: ${setting.recorded}`;
+          row.appendChild(recorded);
+        }
+        return row;
+      }
+
       // Reviews are disabled on a world-open dashboard; hide the form entirely.
       async function loadCapabilities() {
         try {
@@ -1102,6 +1179,7 @@
       loadAois();
       loadMethodologies();
       loadContextLayers();
+      loadSettings();
       loadCapabilities();
     </script>
   </body>
