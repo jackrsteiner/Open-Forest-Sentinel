@@ -27,7 +27,8 @@ def _write_delta(
     data: np.ndarray,
     *,
     crs: str = "EPSG:4326",
-    nodata: float = _NODATA,
+    # None = no nodata tag at all — the Earth Engine export convention.
+    nodata: float | None = _NODATA,
 ) -> None:
     height, width = data.shape
     with rasterio.open(
