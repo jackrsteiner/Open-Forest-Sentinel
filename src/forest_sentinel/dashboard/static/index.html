@@ -118,7 +118,13 @@
         background: #fff; border: 2px solid rgba(0, 0, 0, 0.25); border-radius: 4px;
       }
       .gibs-slider[hidden] { display: none; }
-      .gibs-slider input[type="range"] { width: 190px; margin: 0; }
+      .gibs-slider-row { display: flex; align-items: center; gap: 4px; }
+      .gibs-step {
+        font: 14px/1.2 inherit; padding: 1px 7px; cursor: pointer;
+        background: #fff; border: 1px solid #bbb; border-radius: 3px;
+      }
+      .gibs-step:hover { background: #f4f4f4; }
+      .gibs-slider input[type="range"] { width: 170px; margin: 0; }
       .gibs-slider-label { font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
       .basemap-toggle {
         font: inherit; font-size: 12px; padding: 4px 8px; cursor: pointer;
@@ -375,18 +381,38 @@
           L.DomEvent.disableClickPropagation(box);
           L.DomEvent.disableScrollPropagation(box);
           const label = L.DomUtil.create("div", "gibs-slider-label", box);
-          const input = L.DomUtil.create("input", "", box);
+          const row = L.DomUtil.create("div", "gibs-slider-row", box);
+          const back = L.DomUtil.create("button", "gibs-step", row);
+          back.type = "button";
+          back.textContent = "‹";
+          back.title = "Previous day";
+          const input = L.DomUtil.create("input", "", row);
           input.type = "range";
           input.min = "1";
           input.max = String(GIBS_SLIDER_DAYS);
           input.value = String(GIBS_SLIDER_DAYS);
           input.title = "Imagery date (past month)";
-          L.DomEvent.on(input, "input", () => {
-            const daysAgo = GIBS_SLIDER_DAYS + 1 - Number(input.value);
+          const forward = L.DomUtil.create("button", "gibs-step", row);
+          forward.type = "button";
+          forward.textContent = "›";
+          forward.title = "Next day";
+          // Drags debounce the tile swap; the single-day step buttons apply
+          // immediately — that's their point (precision scrubbing, #159).
+          function applyValue(value, immediate) {
+            const clamped = Math.min(GIBS_SLIDER_DAYS, Math.max(1, value));
+            input.value = String(clamped);
+            const daysAgo = GIBS_SLIDER_DAYS + 1 - clamped;
             label.textContent = gibsDateForDaysAgo(daysAgo);
             clearTimeout(gibsSliderDebounce);
-            gibsSliderDebounce = setTimeout(() => setGibsDate(gibsDateForDaysAgo(daysAgo)), 150);
-          });
+            if (immediate) {
+              setGibsDate(gibsDateForDaysAgo(daysAgo));
+            } else {
+              gibsSliderDebounce = setTimeout(() => setGibsDate(gibsDateForDaysAgo(daysAgo)), 150);
+            }
+          }
+          L.DomEvent.on(input, "input", () => applyValue(Number(input.value), false));
+          L.DomEvent.on(back, "click", () => applyValue(Number(input.value) - 1, true));
+          L.DomEvent.on(forward, "click", () => applyValue(Number(input.value) + 1, true));
           gibsSliderBox = box;
           gibsSliderInput = input;
           gibsSliderLabel = label;
